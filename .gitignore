@@ -1,0 +1,26 @@
+# environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# data and large artifacts
+data/
+runs/
+results/
+*.pt
+*.onnx
+*.engine
+
+# private research notes: keep them local, only README is public
+/*.md
+!/README.md
+
+# local tooling
+.workbuddy/
+.idea/
+.vscode/
+
+# os
+Thumbs.db
+.DS_Store

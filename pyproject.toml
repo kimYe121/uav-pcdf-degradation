@@ -1,0 +1,16 @@
+[project]
+name = "modality-decay"
+version = "0.1.0"
+description = "Diagnosing negative fusion under continuous modality decay in UAV RGB-IR oriented object detection"
+requires-python = ">=3.10"
+dependencies = [
+    "ultralytics>=8.3",
+    "numpy",
+    "opencv-python",
+    "pyyaml",
+    "matplotlib",
+    "pandas",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
