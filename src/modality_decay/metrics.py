@@ -57,7 +57,7 @@ def summarize(df) -> dict:
         nf = nf_curve(fusion, rgb, ir)
         out[protocol] = {
             "levels": levels,
-            "fusion": fusion,
+            "fused": fusion,
             "rgb": rgb,
             "ir": ir,
             "nf": nf,

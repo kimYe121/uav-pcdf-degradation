@@ -9,9 +9,20 @@ P1_KINDS = ("night", "fog", "blur", "noise")
 
 
 def fuse(rgb: np.ndarray, ir: np.ndarray, alpha: float = 0.5) -> np.ndarray:
-    """Fixed-weight input-level fusion (pilot proxy for a two-stream baseline)."""
-    ir3 = cv2.cvtColor(ir, cv2.COLOR_GRAY2BGR) if ir.ndim == 2 else ir
-    return cv2.addWeighted(rgb, alpha, ir3, 1.0 - alpha, 0)
+    """Channel-concat proxy for an early-fusion baseline.
+
+    RGB keeps texture in R/G; IR is injected into B. Unlike pixel averaging this
+    preserves contrast, and unlike a true two-stream network it cannot reweight
+    the degraded stream -- which is exactly the failure mode under study.
+
+    `alpha` is kept for API compatibility with the weighted variant.
+    """
+    out = rgb.copy()
+    if ir.ndim == 2:
+        out[..., 0] = ir
+    else:
+        out[..., 0] = ir[..., 0]
+    return out
 
 
 def _p1(img: np.ndarray, s: float, kind: str, rng: np.random.Generator) -> np.ndarray:

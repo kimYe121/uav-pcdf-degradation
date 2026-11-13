@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 
 COLORS = {"fused": "#A32D2D", "rgb": "#185FA5", "ir": "#0F6E56"}
-LABELS = {"fused": "fusion (fixed 0.5/0.5)", "rgb": "RGB-only", "ir": "IR-only"}
+LABELS = {"fused": "fusion (channel-concat)", "rgb": "RGB-only", "ir": "IR-only"}
 
 
 def plot_curves(summary: dict, out_png: str | Path, title: str = "Availability-performance") -> Path:

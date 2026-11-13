@@ -53,6 +53,18 @@ D:/anaconda3/python.exe scripts/run_smoke.py
 
 Outputs land in `results/` (`*_results.csv`, `*_summary.txt`, `*_curves.png`).
 
+Smoke reference run (synthetic, 60 train / 20 val, 6 epochs, `yolo11n-obb`):
+
+```
+P1: NF min=-0.13 | s*=0.147 | slope fusion=-0.21 rgb=-0.31 ir=+0.00
+P2: NF min=-0.01 | s*=0.731 | slope fusion=-0.08 rgb=-1.00 ir=+0.00
+```
+
+Read this as a wiring check only. It confirms that the fusion curve starts above both single
+modalities and can cross below the clean-IR line, and it hints that contamination (P1) crosses much
+earlier than zeroing (P2) — consistent with a system that cannot detect its own degradation. The
+absolute values carry no scientific weight.
+
 ## Three degradation protocols
 
 | Protocol | Operation | What stays intact |
@@ -70,13 +82,18 @@ breaks cross-modal correspondence — the case a single-modality quality score c
 |---|---|
 | `rgb` | visible only |
 | `ir` | infrared only (grayscale replicated to 3 channels) |
-| `fused` | fixed-weight input fusion `0.5*rgb + 0.5*ir` |
+| `fused` | RGB with IR injected into the B channel (channel-concat proxy) |
 
-The fixed-weight fusion is a pilot proxy. It reproduces the failure mode of interest (a fusion
-model whose weighting was learned under "both streams healthy") at near-zero implementation cost.
-A learned two-stream baseline replaces it for the real experiments.
+The fusion proxy is deliberately minimal: RGB texture stays in R/G, thermal evidence enters through B,
+and nothing can reweight the degraded stream. An earlier pixel-averaging proxy was abandoned because
+averaging preserves the clean stream's information and could not reproduce the failure mode — the
+phenomenon lives at the feature level, not the pixel level. A learned two-stream baseline replaces this
+proxy for the real experiments.
 
 ## Real data
+
+Dataset repository: **https://github.com/supercpy/ATR-UMOD** — the paper's Baidu Pan link
+(access code `accd`) is listed there, together with the annotation format notes.
 
 Download ATR-UMOD, then convert to YOLO-OBB and split by scene:
 

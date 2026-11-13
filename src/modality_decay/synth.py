@@ -12,6 +12,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .degrade import fuse
+
 SPLITS = ("train", "val")
 VIEWS = ("rgb", "ir", "fused")
 
@@ -37,12 +39,12 @@ def _draw_targets(rgb: np.ndarray, ir: np.ndarray, rng: np.random.Generator) -> 
         box = cv2.boxPoints(((cx, cy), (bw, bh), angle)).astype(np.float32)
 
         color = rng.integers(40, 230, 3)
-        if rng.random() < 0.5:
-            color = (120 + (color - 120) * 0.35).astype(int)
+        if rng.random() < 0.2:
+            color = (120 + (color - 120) * 0.6).astype(int)
         cv2.fillPoly(rgb, [box.astype(np.int32)], tuple(int(c) for c in color))
         cv2.polylines(rgb, [box.astype(np.int32)], True, (25, 25, 25), 1, cv2.LINE_AA)
 
-        hot = int(rng.integers(180, 245)) if rng.random() < 0.8 else int(rng.integers(70, 110))
+        hot = int(rng.integers(180, 245)) if rng.random() < 0.4 else int(rng.integers(70, 110))
         cv2.fillPoly(ir, [box.astype(np.int32)], hot)
 
         xs = np.clip(box[:, 0] / w, 0.0, 1.0)
@@ -61,14 +63,9 @@ def _make_pair(size: tuple[int, int], rng: np.random.Generator) -> tuple[np.ndar
     labels = _draw_targets(rgb, ir, rng)
 
     rgb = cv2.GaussianBlur(rgb, (3, 3), 0.6)
-    ir = cv2.GaussianBlur(ir, (5, 5), 1.0)
-    ir = np.clip(ir.astype(np.float32) + rng.normal(0, 3.0, ir.shape), 0, 255).astype(np.uint8)
+    ir = cv2.GaussianBlur(ir, (9, 9), 2.2)
+    ir = np.clip(ir.astype(np.float32) + rng.normal(0, 10.0, ir.shape), 0, 255).astype(np.uint8)
     return rgb, ir, labels
-
-
-def _fuse(rgb: np.ndarray, ir: np.ndarray, alpha: float) -> np.ndarray:
-    ir3 = cv2.cvtColor(ir, cv2.COLOR_GRAY2BGR)
-    return cv2.addWeighted(rgb, alpha, ir3, 1.0 - alpha, 0)
 
 
 def build_synthetic(root: str | Path, n_train: int, n_val: int, size: list[int], seed: int = 0) -> Path:
@@ -90,7 +87,7 @@ def build_synthetic(root: str | Path, n_train: int, n_val: int, size: list[int],
             cv2.imwrite(str(root / "ir" / "images" / split / f"{stem}.jpg"), ir, [cv2.IMWRITE_JPEG_QUALITY, 95])
             cv2.imwrite(
                 str(root / "fused" / "images" / split / f"{stem}.jpg"),
-                _fuse(rgb, ir, 0.5),
+                fuse(rgb, ir, 0.5),
                 [cv2.IMWRITE_JPEG_QUALITY, 95],
             )
             text = "\n".join(labels) + ("\n" if labels else "")
