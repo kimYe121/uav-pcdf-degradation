@@ -1,6 +1,10 @@
-# uav-modality-decay
+<p align="center">
+  <a href="#english">English</a> &nbsp;·&nbsp; <a href="#chinese">简体中文</a>
+</p>
 
-English | [简体中文](README.zh-CN.md)
+<a name="english"></a>
+
+# uav-modality-decay
 
 Diagnosing negative fusion under continuous modality decay in UAV RGB-IR oriented object detection.
 
@@ -111,7 +115,7 @@ which locates the phenomenon at the feature level rather than the pixel level.
 
 ```
 configs/                 experiment configs (smoke, pilot)
-scripts/                 entry points: env check, synthetic build, data prep, smoke run
+scripts/                 entry points: env check, synthetic build, data prep, pilot run
 src/modality_decay/      package: synth, degrade, datasets, train, evaluate, metrics, plots
 tools/                   standalone conversion and metric helpers
 ```
@@ -124,3 +128,134 @@ tools/                   standalone conversion and metric helpers
 - MultiCorrupt, arXiv 2402.11677 — RA / RRA corruption-robustness metrics
 - Ultra-Fusion, arXiv 2606.21223 — factor-wise reliability scheduling in SLAM
 - DRNet — dynamic routing under missing modalities
+
+---
+
+<a name="chinese"></a>
+
+# uav-modality-decay
+
+面向无人机 RGB-IR 旋转框目标检测：连续模态衰减下的负融合诊断。
+
+## 研究问题
+
+成对的可见光/红外检测器通常在双路完好的数据上训练与评测。真实部署中，一路会退化——低照度、
+镜头污染、配准漂移——而另一路仍然可用。此时融合是否还优于「干脆丢掉坏的那一路」？从哪里开始不优？
+
+```
+NF(s) = mAP_fusion(s) − max(mAP_rgb_only(s), mAP_ir_only(s))
+```
+
+`NF < 0` 表示融合模型比更好的单模态还差，`s*` 是二者的交点，本项目要问的是这个交点是否随成像条件移动。
+
+## 进展
+
+| 模块 | 状态 |
+|---|---|
+| 全链路（数据准备 → 训练 → 退化 → 评测 → 曲线） | 可用 |
+| 合成数据冒烟测试 | 通过 |
+| ATR-UMOD 真实 pilot | 进行中 |
+| 可靠性路由（方法） | 未实现 |
+
+合成数据只用于验证数据转换、训练、退化、指标与绘图是否接通，**不构成研究结论的证据**。
+
+## 安装
+
+```bash
+git clone https://github.com/kimYe121/uav-modality-decay.git
+cd uav-modality-decay
+pip install -e .
+```
+
+需要 Python 3.10 及以上。训练需要 CUDA 显卡；评测与合成冒烟测试可在 CPU 上运行。
+
+## 快速开始
+
+```bash
+python scripts/check_env.py      # 检查 torch / CUDA / ultralytics
+python scripts/run_smoke.py      # 合成数据全链路，几分钟
+```
+
+输出位于 `results/`：`*_results.csv`、`*_summary.txt`、`*_curves.png`。
+
+## 数据
+
+实验使用 [ATR-UMOD](https://github.com/supercpy/ATR-UMOD)（ICCV 2025）：13,353 对配准 RGB–IR 图像、
+旋转框、11 类车辆目标、每图 6 个成像条件属性。从该仓库提供的链接下载（论文网盘提取码 `accd`），
+解压后目录如下：
+
+```
+data/ATR-UMOD/
+├── train/
+│   ├── images/       # 可见光
+│   ├── images_ir/    # 红外（单通道灰度）
+│   ├── labels/       # VOC 风格 XML，可见光
+│   └── labels_ir/    # VOC 风格 XML，红外
+└── test/
+    └── （结构相同）
+```
+
+转换为 YOLO-OBB 并按场景切出验证集：
+
+```bash
+python scripts/prepare_atr.py check   --root data/ATR-UMOD
+python scripts/prepare_atr.py convert --root data/ATR-UMOD --out data/atr_umod
+```
+
+`check` 会在写任何文件之前打印类别名、实例数、坐标点个数与属性字段名，先确认再转换。
+**不要按帧随机切分**：同一航次的相邻帧几乎是重复样本，会让验证指标虚高。正式结果至少跑 3 个随机种子，
+报 mean ± std。
+
+## 三类退化协议
+
+| 协议 | 操作 | 保持完好的部分 |
+|---|---|---|
+| P1 污染 | 对可见光施加低照度+读出噪声、雾散射、模糊或加性噪声 | 红外不动 |
+| P2 置零 | 可见光被压向全黑 | 红外不动 |
+| P3 配准漂移 | 红外帧平移 2–20 px | 两路各自质量都完好 |
+
+P1/P2 降低单路质量；P3 让两路自身质量都保持为 1.0，只破坏跨模态对应关系——这正是单路质量分数
+无法捕捉的那一类失效。
+
+## 三种模型视图
+
+| 视图 | 输入 |
+|---|---|
+| `rgb` | 仅可见光 |
+| `ir` | 仅红外（灰度复制为三通道） |
+| `fused` | 将红外注入 B 通道的可见光（通道拼接代理） |
+
+融合代理刻意保持最简：它无法对退化的一路重新加权，而这正是要研究的失效模式。正式实验会替换为
+可学习的双流基线。此前尝试过像素平均，但它会保留干净一路的信息、把效应掩盖掉，说明现象位于特征层
+而非像素层，因此弃用。
+
+## 指标
+
+- `RA(s) = mAP(s) / mAP(clean)`：抗退化能力，沿用 MultiCorrupt
+- `NF(s)`：负融合间隙，定义见上
+- `s*`：`NF` 首次变号处，档位之间线性插值
+- `mAP` 对 `s` 的斜率：曲线不交叉时的弱版本结论
+
+## 目录结构
+
+```
+configs/                 实验配置（smoke、pilot）
+scripts/                 入口：环境检查、合成数据、数据准备、pilot 运行
+src/modality_decay/      包：synth、degrade、datasets、train、evaluate、metrics、plots
+tools/                   独立的数据转换与指标工具
+```
+
+## 参考文献
+
+- ATR-UMOD / PCDF，ICCV 2025：数据集与条件感知融合基线
+- M²D-LIF，ICCV 2025：正式命名 fusion degradation
+- RSC-MD，arXiv 2511.15433：融合退化的梯度抑制解释
+- MultiCorrupt，arXiv 2402.11677：RA / RRA 退化鲁棒性指标
+- Ultra-Fusion，arXiv 2606.21223：SLAM 中的因子级可靠性调度
+- DRNet：模态缺失下的动态路由
+
+---
+
+<p align="center">
+  <a href="#english">English</a> &nbsp;·&nbsp; <a href="#chinese">简体中文</a>
+</p>
