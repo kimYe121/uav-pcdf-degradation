@@ -52,6 +52,11 @@ python scripts/run_smoke.py      # synthetic end-to-end run, a few minutes
 
 Outputs: `results/*_results.csv`, `results/*_summary.txt`, `results/*_curves.png`.
 
+![synthetic smoke run](docs/smoke_curves.png)
+
+A synthetic wiring check, not a result: the fusion curve starts above both single modalities and
+crosses the IR-only line at s≈0.15 (contamination) and s≈0.73 (zeroing).
+
 ## Data
 
 The experiments use [ATR-UMOD](https://github.com/supercpy/ATR-UMOD) (ICCV 2025): 13,353 registered
@@ -115,9 +120,9 @@ which locates the phenomenon at the feature level rather than the pixel level.
 
 ```
 configs/                 experiment configs (smoke, pilot)
-scripts/                 entry points: env check, synthetic build, data prep, pilot run
+docs/                    figures referenced by this README
+scripts/                 entry points: env check, data prep, smoke and pilot runs
 src/modality_decay/      package: synth, degrade, datasets, train, evaluate, metrics, plots
-tools/                   standalone conversion and metric helpers
 ```
 
 ## References
@@ -128,6 +133,10 @@ tools/                   standalone conversion and metric helpers
 - MultiCorrupt, arXiv 2402.11677 — RA / RRA corruption-robustness metrics
 - Ultra-Fusion, arXiv 2606.21223 — factor-wise reliability scheduling in SLAM
 - DRNet — dynamic routing under missing modalities
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ---
 
@@ -177,6 +186,11 @@ python scripts/run_smoke.py      # 合成数据全链路，几分钟
 ```
 
 输出位于 `results/`：`*_results.csv`、`*_summary.txt`、`*_curves.png`。
+
+![合成数据冒烟结果](docs/smoke_curves.png)
+
+这是链路验证，不是研究结论：融合曲线起点高于两个单模态，并在 s≈0.15（污染）与 s≈0.73（置零）处
+跌破红外单模态那条水平线。
 
 ## 数据
 
@@ -240,9 +254,9 @@ P1/P2 降低单路质量；P3 让两路自身质量都保持为 1.0，只破坏�
 
 ```
 configs/                 实验配置（smoke、pilot）
-scripts/                 入口：环境检查、合成数据、数据准备、pilot 运行
+docs/                    README 引用的图片
+scripts/                 入口：环境检查、数据准备、冒烟与 pilot 运行
 src/modality_decay/      包：synth、degrade、datasets、train、evaluate、metrics、plots
-tools/                   独立的数据转换与指标工具
 ```
 
 ## 参考文献
@@ -253,6 +267,10 @@ tools/                   独立的数据转换与指标工具
 - MultiCorrupt，arXiv 2402.11677：RA / RRA 退化鲁棒性指标
 - Ultra-Fusion，arXiv 2606.21223：SLAM 中的因子级可靠性调度
 - DRNet：模态缺失下的动态路由
+
+## 许可证
+
+MIT，详见 [LICENSE](LICENSE)。
 
 ---
 
