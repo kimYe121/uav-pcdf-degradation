@@ -1,112 +1,126 @@
 # uav-modality-decay
 
+English | [简体中文](README.zh-CN.md)
+
 Diagnosing negative fusion under continuous modality decay in UAV RGB-IR oriented object detection.
 
-Given a paired visible/infrared detector, this repository asks a narrow question:
+## The question
 
-> When one modality decays continuously while the other stays clean, at what point does
-> fixed-weight fusion fall **below the better single modality** — and does that crossing
-> point move with imaging conditions?
+Paired visible/infrared detectors are trained and benchmarked with both streams healthy. In deployment
+one stream degrades — low light, lens contamination, misregistration — while the other remains usable.
+Does fusion still beat simply discarding the bad stream, and where does it stop doing so?
 
-`NF(s) = mAP_fusion(s) − max(mAP_rgb_only(s), mAP_ir_only(s))`, negative `NF` means the fused
-model is worse than simply discarding the degraded stream. `s*` is the crossing point.
+```
+NF(s) = mAP_fusion(s) − max(mAP_rgb_only(s), mAP_ir_only(s))
+```
+
+`NF < 0` means the fused model is worse than the better single modality. `s*` is the crossing point,
+and the project asks whether `s*` moves with imaging conditions.
 
 ## Status
 
 | Part | State |
 |---|---|
-| Pipeline (train → degrade → evaluate → curve) | working on synthetic data |
-| Real ATR-UMOD integration | pending dataset download |
-| Reliability gating (method) | not implemented yet |
+| Pipeline (prepare → train → degrade → evaluate → curves) | working |
+| Synthetic smoke test | passing |
+| Real ATR-UMOD pilot | in progress |
+| Reliability routing (method) | not implemented |
 
-**Synthetic results are a code-correctness check, not evidence.** The synthetic generator is
-deliberately built so that clean fusion beats both single modalities; it exists to verify that
-data conversion, training, degradation, metric computation and plotting are wired correctly.
+Synthetic runs exist only to verify that data conversion, training, degradation, metric computation
+and plotting are wired correctly. They are not evidence for the research claim.
 
-## Layout
+## Install
 
+```bash
+git clone https://github.com/kimYe121/uav-modality-decay.git
+cd uav-modality-decay
+pip install -e .
 ```
-configs/pilot.yaml          experiment config
-scripts/check_env.py        verify torch/CUDA/ultralytics
-scripts/build_synth.py      generate synthetic RGB-IR pairs + YOLO-OBB labels
-scripts/run_smoke.py        full smoke run
-src/modality_decay/
-  synth.py                  synthetic pair generator
-  degrade.py                P1 contamination / P2 zeroing / P3 misregistration
-  datasets.py               YOLO data.yaml + degraded split materialization
-  train.py                  one detector per view (rgb / ir / fused)
-  evaluate.py               validation wrapper
-  metrics.py                RA / NF / s* / slope
-  plots.py                  availability-performance curves
-tools/                      dataset conversion helpers
-```
+
+Python 3.10+. Training needs a CUDA-capable GPU; evaluation and the synthetic smoke test run on CPU.
 
 ## Quick start
 
-Use the existing conda environment (torch 2.11 + cu128 in this setup). Do not create a second
-environment; install into the current one if a package is missing.
+```bash
+python scripts/check_env.py      # torch / CUDA / ultralytics sanity check
+python scripts/run_smoke.py      # synthetic end-to-end run, a few minutes
+```
+
+Outputs: `results/*_results.csv`, `results/*_summary.txt`, `results/*_curves.png`.
+
+## Data
+
+The experiments use [ATR-UMOD](https://github.com/supercpy/ATR-UMOD) (ICCV 2025): 13,353 registered
+RGB–IR pairs, oriented boxes, 11 vehicle classes, six per-image condition attributes. Download it
+from the link in that repository (the paper's Baidu Pan code is `accd`) and unpack to:
+
+```
+data/ATR-UMOD/
+├── train/
+│   ├── images/       # visible
+│   ├── images_ir/    # infrared (grayscale)
+│   ├── labels/       # VOC-style XML, visible
+│   └── labels_ir/    # VOC-style XML, infrared
+└── test/
+    └── (same structure)
+```
+
+Convert to YOLO-OBB and carve a validation split by scene:
 
 ```bash
-D:/anaconda3/python.exe scripts/check_env.py
-D:/anaconda3/python.exe scripts/run_smoke.py
+python scripts/prepare_atr.py check   --root data/ATR-UMOD
+python scripts/prepare_atr.py convert --root data/ATR-UMOD --out data/atr_umod
 ```
 
-Outputs land in `results/` (`*_results.csv`, `*_summary.txt`, `*_curves.png`).
+`check` prints class names, instance counts, coordinate arity and attribute fields before anything is
+written. Do not split by random frame: adjacent frames from one flight are near-duplicates and inflate
+validation scores. Report mean ± std over at least three seeds.
 
-Smoke reference run (synthetic, 60 train / 20 val, 6 epochs, `yolo11n-obb`):
-
-```
-P1: NF min=-0.13 | s*=0.147 | slope fusion=-0.21 rgb=-0.31 ir=+0.00
-P2: NF min=-0.01 | s*=0.731 | slope fusion=-0.08 rgb=-1.00 ir=+0.00
-```
-
-Read this as a wiring check only. It confirms that the fusion curve starts above both single
-modalities and can cross below the clean-IR line, and it hints that contamination (P1) crosses much
-earlier than zeroing (P2) — consistent with a system that cannot detect its own degradation. The
-absolute values carry no scientific weight.
-
-## Three degradation protocols
+## Degradation protocols
 
 | Protocol | Operation | What stays intact |
 |---|---|---|
-| P1 contamination | low light + read noise, fog scattering, blur, or additive noise on RGB | IR frame untouched |
-| P2 zeroing | RGB scaled toward black | IR frame untouched |
-| P3 misregistration | IR frame translated (2–20 px) | both images individually clean |
+| P1 contamination | low light + read noise, fog scattering, blur, or additive noise on RGB | IR untouched |
+| P2 zeroing | RGB driven toward black | IR untouched |
+| P3 misregistration | IR frame translated by 2–20 px | both images individually clean |
 
-P1/P2 drive single-modality quality down. P3 keeps `q_self` at 1.0 for both streams and only
-breaks cross-modal correspondence — the case a single-modality quality score cannot catch.
+P1/P2 reduce single-modality quality. P3 keeps each stream's own quality at 1.0 and only breaks
+cross-modal correspondence — the case a single-modality quality score cannot catch.
 
-## Views trained
+## Model views
 
 | View | Input |
 |---|---|
 | `rgb` | visible only |
-| `ir` | infrared only (grayscale replicated to 3 channels) |
+| `ir` | infrared only (grayscale replicated to three channels) |
 | `fused` | RGB with IR injected into the B channel (channel-concat proxy) |
 
-The fusion proxy is deliberately minimal: RGB texture stays in R/G, thermal evidence enters through B,
-and nothing can reweight the degraded stream. An earlier pixel-averaging proxy was abandoned because
-averaging preserves the clean stream's information and could not reproduce the failure mode — the
-phenomenon lives at the feature level, not the pixel level. A learned two-stream baseline replaces this
-proxy for the real experiments.
+The fusion proxy is intentionally minimal: it cannot reweight a degraded stream, which is the failure
+mode under study. A learned two-stream baseline replaces it in the full experiments. Pixel averaging
+was tried first and abandoned — it preserves the clean stream's information and hides the effect,
+which locates the phenomenon at the feature level rather than the pixel level.
 
-## Real data
+## Metrics
 
-Dataset repository: **https://github.com/supercpy/ATR-UMOD** — the paper's Baidu Pan link
-(access code `accd`) is listed there, together with the annotation format notes.
+- `RA(s) = mAP(s) / mAP(clean)` — resistance ability, following MultiCorrupt
+- `NF(s)` — negative fusion gap, defined above
+- `s*` — first sign change of `NF`, linear interpolation between levels
+- slope of `mAP` against `s` — the weaker claim when no crossing occurs
 
-Download ATR-UMOD, then convert to YOLO-OBB and split by scene:
+## Project layout
 
-```bash
-D:/anaconda3/python.exe tools/atr_umod_prepare.py check --root <ATR-UMOD-root>
-D:/anaconda3/python.exe tools/atr_umod_prepare.py convert --root <ATR-UMOD-root> --out data/atr_umod
+```
+configs/                 experiment configs (smoke, pilot)
+scripts/                 entry points: env check, synthetic build, data prep, smoke run
+src/modality_decay/      package: synth, degrade, datasets, train, evaluate, metrics, plots
+tools/                   standalone conversion and metric helpers
 ```
 
-Never split frames randomly: adjacent frames from one flight are near-duplicates, which inflates
-validation scores. Split by scene and report mean±std over at least three seeds.
+## References
 
-## Notes on naming
-
-`availability-aware fusion` is already used by ASF (NeurIPS 2025), and `dynamic routing for
-modality missing` by DRNet. This project deliberately uses **modality decay** to mark the
-difference: continuous decay with a measurable crossing point, not binary missing-modality routing.
+- ATR-UMOD / PCDF, ICCV 2025 — dataset and condition-aware fusion baseline
+- M²D-LIF, ICCV 2025 — names fusion degradation
+- RSC-MD, arXiv 2511.15433 — gradient-suppression account of fusion degradation
+- MultiCorrupt, arXiv 2402.11677 — RA / RRA corruption-robustness metrics
+- Ultra-Fusion, arXiv 2606.21223 — factor-wise reliability scheduling in SLAM
+- DRNet — dynamic routing under missing modalities

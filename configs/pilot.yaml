@@ -1,8 +1,8 @@
 name: pilot
 data_root: data
 seed: 0
-imgsz: 320
-epochs: 8
+imgsz: 384
+epochs: 15
 batch: 8
 device: "0"
 workers: 0

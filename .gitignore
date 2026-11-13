@@ -15,6 +15,7 @@ results/
 # private research notes: keep them local, only README is public
 /*.md
 !/README.md
+!/README.zh-CN.md
 
 # local tooling
 .workbuddy/
