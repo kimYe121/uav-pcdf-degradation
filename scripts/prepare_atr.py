@@ -152,6 +152,11 @@ def cmd_convert(args: argparse.Namespace) -> None:
         w, h, attrs, objs = parse_xml(p)
         meta[p.stem] = (w, h, attrs)
         class_set.update(name for name, _ in objs)
+    if args.classes:
+        missing = sorted(set(args.classes) - class_set)
+        if missing:
+            raise ValueError(f"classes not found in training labels: {missing}")
+        class_set = set(args.classes)
     class_names = sorted(class_set)
     class_id = {n: i for i, n in enumerate(class_names)}
     print(f"classes ({len(class_names)}): {class_names}")
@@ -163,12 +168,19 @@ def cmd_convert(args: argparse.Namespace) -> None:
         return f"{loc}|{day}"
 
     groups = {stem: group_of(stem) for stem in meta}
-    keys = sorted(set(groups.values()))
+    group_sizes = Counter(groups.values())
+    keys = sorted(group_sizes)
     rng = random.Random(args.seed)
     rng.shuffle(keys)
-    n_val = max(1, int(round(len(keys) * args.val_frac)))
-    val_keys = set(keys[:n_val])
-    print(f"scene groups: {len(keys)}, holding out {n_val} -> val")
+    target = max(1, int(round(len(meta) * args.val_frac)))
+    val_keys: set[str] = set()
+    acc = 0
+    for k in keys:
+        if acc >= target:
+            break
+        val_keys.add(k)
+        acc += group_sizes[k]
+    print(f"scene groups: {len(keys)}, holding out {len(val_keys)} groups / {acc} images -> val")
 
     subsets = {"train": "train", "test": "test"}
     for view in VIEWS:
@@ -253,6 +265,12 @@ def main() -> None:
     v.add_argument("--val-frac", type=float, default=0.15)
     v.add_argument("--limit", type=int, default=0, help="use only the first N training pairs")
     v.add_argument("--seed", type=int, default=0)
+    v.add_argument(
+        "--classes",
+        nargs="+",
+        default=None,
+        help="optional class allowlist; labels are remapped to contiguous ids",
+    )
     v.set_defaults(func=cmd_convert)
 
     args = ap.parse_args()

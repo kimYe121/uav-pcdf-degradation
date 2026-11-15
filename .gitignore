@@ -12,9 +12,10 @@ results/
 *.onnx
 *.engine
 
-# private research notes: keep them local, only README is public
+# private research notes: only the public project guide is tracked
 /*.md
 !/README.md
+!/REPRODUCTION.md
 
 # local tooling
 .workbuddy/

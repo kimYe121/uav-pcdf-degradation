@@ -6,129 +6,108 @@
 
 # uav-modality-decay
 
-面向无人机 RGB-IR 旋转框目标检测：连续模态衰减下的负融合诊断。
+**PCDF 核心机制复现与无人机 RGB-IR 旋转目标检测的部署退化研究。**
 
-## 研究问题
+基于 [ATR-UMOD / PCDF（ICCV 2025）](https://openaccess.thecvf.com/content/ICCV2025/html/Chen_Fusion_Meets_Diverse_Conditions_A_High-diversity_Benchmark_and_Baseline_for_ICCV_2025_paper.html)，在统一、公开的检测骨架上研究：条件感知动态融合面对部署期单路退化、缺失和跨模态错位时，是否仍然可靠。
 
-成对的可见光/红外检测器通常在双路完好的数据上训练与评测。真实部署中，一路会退化——低照度、
-镜头污染、配准漂移——而另一路仍然可用。此时融合是否还优于「干脆丢掉坏的那一路」？从哪里开始不优？
+> **当前状态：研究策略与数据管线阶段。PCDF 尚未实现或复现成功；没有真实数据上的负融合阈值结论。**
 
-```
-NF(s) = mAP_fusion(s) − max(mAP_rgb_only(s), mAP_ir_only(s))
-```
+## 研究主线
 
-`NF < 0` 表示融合模型比更好的单模态还差，`s*` 是二者的交点，本项目要问的是这个交点是否随成像条件移动。
+1. **方法级复现**：实现 PCDF 的样本特定条件提示学习（SCPL）、提示引导条件解耦（PCD）和条件感知动态融合（CDF）。
+2. **公平对照**：在同一骨架、数据划分和训练预算下比较 RGB-only、IR-only、双流 concat、普通动态门控、条件引导融合与 PCDF 式完整模型。
+3. **部署扩展**：冻结训练好的模型，只对推理输入施加 P1 连续污染、P2 单路缺失、P3 配准漂移，评价条件门控的失效与改进。
+4. **改进验证**：检验当前模态状态观测与连续回退能否减少退化下的性能损失；不预设改进一定有效。
 
-## 进展
+复现边界、公开公式、未公开实现细节和验收顺序见 **[REPRODUCTION.md](REPRODUCTION.md)**。
 
-| 模块 | 状态 |
+## 不做什么
+
+- 不把六通道 early fusion、B 通道替换或合成数据结果称为 PCDF。
+- 不把不同数据子集、骨架和划分下的结果与论文的 63.1 mAP50 直接比较。
+- 不预设所有退化都存在统一、可部署的固定阈值。
+- 不宣称首次发现负融合；ATR-UMOD 补充材料已讨论普通融合低于最佳单模态的现象。
+
+## 当前进展
+
+| 部分 | 状态 |
 |---|---|
-| 全链路（数据准备 → 训练 → 退化 → 评测 → 曲线） | 可用 |
-| 合成数据冒烟测试 | 通过 |
-| ATR-UMOD 真实 pilot | 进行中 |
-| 可靠性路由（方法） | 未实现 |
+| ATR-UMOD 成对数据转换、场景级划分 | 已实现 |
+| 单模态 OBB 基线入口 | 已实现；已有小子集对照，非论文基准 |
+| 真实六通道 early fusion | 前期对照；不是 PCDF |
+| 双流 concat / CDF / SCPL / PCD | 待实现 |
+| PCDF 式完整模型及消融 | 未开始 |
+| 部署退化协议与 `NF / RA` 工具 | 原型；待接入有效融合模型 |
+| 模态状态观测、连续回退 | 未实现 |
+| 推理期失效阈值结论 | **尚未获得** |
 
-合成数据只用于验证数据转换、训练、退化、指标与绘图是否接通，**不构成研究结论的证据**。
+历史合成冒烟结果仅用于链路测试，不能作为研究证据。
 
-## 安装
+## 安装与检查
 
 ```bash
 git clone https://github.com/kimYe121/uav-modality-decay.git
 cd uav-modality-decay
 pip install -e .
+python scripts/check_env.py
 ```
 
-需要 Python 3.10 及以上。训练需要 CUDA 显卡；评测与合成冒烟测试可在 CPU 上运行。
-
-## 快速开始
-
-```bash
-python scripts/check_env.py      # 检查 torch / CUDA / ultralytics
-python scripts/run_smoke.py      # 合成数据全链路，几分钟
-```
-
-输出位于 `results/`：`*_results.csv`、`*_summary.txt`、`*_curves.png`。
-
-![合成数据冒烟结果](docs/smoke_curves.png)
-
-这是链路验证，不是研究结论：融合曲线起点高于两个单模态，并在 s≈0.15（污染）与 s≈0.73（置零）处
-跌破红外单模态那条水平线。
+需要 Python 3.10+。训练需要 CUDA 显卡；合成冒烟测试可在 CPU 上运行。小批量实现验证可使用 8GB 显存，完整对照和消融建议采用 24GB 级显卡；正式租卡时长以本地显存和单 epoch 实测为准。
 
 ## 数据
 
-实验使用 [ATR-UMOD](https://github.com/supercpy/ATR-UMOD)（ICCV 2025）：13,353 对配准 RGB–IR 图像、
-旋转框、11 类车辆目标、每图 6 个成像条件属性。从该仓库提供的链接下载（论文网盘提取码 `accd`），
-解压后目录如下：
+使用 [ATR-UMOD](https://github.com/supercpy/ATR-UMOD)：配准 RGB-IR 图像、11 类目标、OBB 标注和六个成像条件属性。按官方仓库说明下载并解压：
 
-```
+```text
 data/ATR-UMOD/
-├── train/
-│   ├── images/       # 可见光
-│   ├── images_ir/    # 红外（单通道灰度）
-│   ├── labels/       # VOC 风格 XML，可见光
-│   └── labels_ir/    # VOC 风格 XML，红外
-└── test/
-    └── （结构相同）
+└── train|test/
+    ├── images/
+    ├── images_ir/
+    ├── labels/
+    └── labels_ir/
 ```
 
-转换为 YOLO-OBB 并按场景切出验证集：
+转换为 YOLO-OBB 并按“地点＋日期”划分验证集：
 
 ```bash
 python scripts/prepare_atr.py check   --root data/ATR-UMOD
 python scripts/prepare_atr.py convert --root data/ATR-UMOD --out data/atr_umod
 ```
 
-`check` 会在写任何文件之前打印类别名、实例数、坐标点个数与属性字段名，先确认再转换。
-**不要按帧随机切分**：同一航次的相邻帧几乎是重复样本，会让验证指标虚高。正式结果至少跑 3 个随机种子，
-报 mean ± std。
+`check` 会在写文件前报告类别、实例、坐标和条件属性。不可按帧随机切分；正式融合实验使用 IR 标签、官方 test，并从 train 中划分场景隔离的 val。论文复现实验采用 11 类；`--classes` 仅用于前期子集调试，不用于与论文数值比较。
 
-## 三类退化协议
+## 实验协议
 
-| 协议 | 操作 | 保持完好的部分 |
+| 协议 | 推理输入操作 | 不变部分 |
 |---|---|---|
-| P1 污染 | 对可见光施加低照度+读出噪声、雾散射、模糊或加性噪声 | 红外不动 |
-| P2 置零 | 可见光被压向全黑 | 红外不动 |
-| P3 配准漂移 | 红外帧平移 2–20 px | 两路各自质量都完好 |
+| P1 连续污染 | 只退化一路：低照度、噪声、雾或模糊 | 另一路与模型参数 |
+| P2 单路缺失 | 一路置零或缺失 | 另一路与模型参数 |
+| P3 配准漂移 | 平移一路，破坏跨模态对应关系 | 两路各自图像质量 |
 
-P1/P2 降低单路质量；P3 让两路自身质量都保持为 1.0，只破坏跨模态对应关系——这正是单路质量分数
-无法捕捉的那一类失效。
-
-## 三种模型视图
-
-| 视图 | 输入 |
-|---|---|
-| `rgb` | 仅可见光 |
-| `ir` | 仅红外（灰度复制为三通道） |
-| `fused` | 将红外注入 B 通道的可见光（通道拼接代理） |
-
-融合代理刻意保持最简：它无法对退化的一路重新加权，而这正是要研究的失效模式。正式实验会替换为
-可学习的双流基线。此前尝试过像素平均，但它会保留干净一路的信息、把效应掩盖掉，说明现象位于特征层
-而非像素层，因此弃用。
-
-## 指标
-
-- `RA(s) = mAP(s) / mAP(clean)`：抗退化能力，沿用 MultiCorrupt
-- `NF(s)`：负融合间隙，定义见上
-- `s*`：`NF` 首次变号处，档位之间线性插值
-- `mAP` 对 `s` 的斜率：曲线不交叉时的弱版本结论
-
-## 目录结构
-
-```
-configs/                 实验配置（smoke、pilot）
-docs/                    README 引用的图片
-scripts/                 入口：环境检查、数据准备、冒烟与 pilot 运行
-src/modality_decay/      包：synth、degrade、datasets、train、evaluate、metrics、plots
+```text
+NF(s,c) = mAP_fusion(s,c) - max(mAP_RGB(s,c), mAP_IR(s,c))
+RA(s)   = mAP(s) / mAP(clean)
 ```
 
-## 参考文献
+`NF < 0` 表示融合弱于最佳单模态。交点 `s*` 仅在确实存在且稳定时作为**条件性经验边界**报告；它不是部署常数。部署时没有真值，不能直接用 `NF` 做在线路由。
 
-- ATR-UMOD / PCDF，ICCV 2025：数据集与条件感知融合基线
-- M²D-LIF，ICCV 2025：正式命名 fusion degradation
-- RSC-MD，arXiv 2511.15433：融合退化的梯度抑制解释
-- MultiCorrupt，arXiv 2402.11677：RA / RRA 退化鲁棒性指标
-- Ultra-Fusion，arXiv 2606.21223：SLAM 中的因子级可靠性调度
-- DRNet：模态缺失下的动态路由
+## 目录
+
+```text
+configs/                 冒烟与前期实验配置
+docs/                    公开图示与复现说明
+scripts/                 数据准备、检查与实验入口
+src/modality_decay/      数据处理、前期融合、退化与评价工具
+REPRODUCTION.md          复现边界、模块清单与分阶段验收标准
+```
+
+## 参考资料
+
+- [PCDF 正文与补充材料（ICCV 2025）](https://openaccess.thecvf.com/content/ICCV2025/html/Chen_Fusion_Meets_Diverse_Conditions_A_High-diversity_Benchmark_and_Baseline_for_ICCV_2025_paper.html)
+- [ATR-UMOD 官方数据集仓库](https://github.com/supercpy/ATR-UMOD)：截至本说明更新时仍标记 PCDF 代码待发布。
+- M²D-LIF、RSC-MD：训练期融合退化与模态梯度失衡。
+- MultiCorrupt：推理期 corruption 与相对性能保持率。
+- DRNet：模态缺失下的动态路由。
 
 ## 许可证
 
@@ -140,133 +119,66 @@ MIT，详见 [LICENSE](LICENSE)。
 
 # uav-modality-decay
 
-Diagnosing negative fusion under continuous modality decay in UAV RGB-IR oriented object detection.
+**Reproducing core PCDF mechanisms and studying deployment-time degradation in UAV RGB-IR oriented object detection.**
 
-## The question
+Using [ATR-UMOD / PCDF (ICCV 2025)](https://openaccess.thecvf.com/content/ICCV2025/html/Chen_Fusion_Meets_Diverse_Conditions_A_High-diversity_Benchmark_and_Baseline_for_ICCV_2025_paper.html), this project asks whether condition-aware dynamic fusion remains reliable when one modality degrades, disappears, or becomes misregistered during deployment.
 
-Paired visible/infrared detectors are trained and benchmarked with both streams healthy. In deployment
-one stream degrades — low light, lens contamination, misregistration — while the other remains usable.
-Does fusion still beat simply discarding the bad stream, and where does it stop doing so?
+> **Status: research redesign and data preparation. PCDF is not yet implemented or reproduced. No real-data negative-fusion threshold has been established.**
 
-```
-NF(s) = mAP_fusion(s) − max(mAP_rgb_only(s), mAP_ir_only(s))
-```
+## Research plan
 
-`NF < 0` means the fused model is worse than the better single modality. `s*` is the crossing point,
-and the project asks whether `s*` moves with imaging conditions.
+1. **Mechanism-level reproduction** of Sample-specific Condition Prompt Learning (SCPL), Prompt-guided Condition Decoupling (PCD), and Condition-aware Dynamic Fusion (CDF).
+2. **Controlled comparisons** of RGB-only, IR-only, dual-stream concat, data-driven gating, condition-guided fusion, and the PCDF-style full model under one backbone, split, and training budget.
+3. **Deployment extension**: freeze the trained model and corrupt only inference inputs using P1 continuous contamination, P2 modality absence, and P3 cross-modal misregistration.
+4. **Targeted improvement**: test whether current modality-state observations and continuous fallback reduce degradation losses, without assuming that they must help.
+
+See **[REPRODUCTION.md](REPRODUCTION.md)** for the reproduction boundary, published details, implementation choices, and staged acceptance criteria.
+
+## Non-claims
+
+- Six-channel early fusion, B-channel replacement, and synthetic results are not PCDF.
+- Results from different backbones, subsets, and splits are not directly comparable with the paper's 63.1 mAP50.
+- A universal deployment threshold is not assumed to exist.
+- Negative fusion is not claimed as a new discovery; the official supplementary material discusses fusion below the best unimodal model.
 
 ## Status
 
 | Part | State |
 |---|---|
-| Pipeline (prepare → train → degrade → evaluate → curves) | working |
-| Synthetic smoke test | passing |
-| Real ATR-UMOD pilot | in progress |
-| Reliability routing (method) | not implemented |
+| Paired ATR-UMOD conversion and scene-level splits | Implemented |
+| Unimodal OBB baseline entry point | Implemented; small-subset checks only |
+| True six-channel early fusion | Preliminary baseline; not PCDF |
+| Dual-stream concat / CDF / SCPL / PCD | Planned |
+| PCDF-style full model and ablations | Not started |
+| P1/P2/P3 protocols and `NF / RA` utilities | Prototypes; require a valid fusion model |
+| Modality-state observation and continuous fallback | Not implemented |
+| Deployment-failure threshold | **Not established** |
 
-Synthetic runs exist only to verify that data conversion, training, degradation, metric computation
-and plotting are wired correctly. They are not evidence for the research claim.
+Synthetic smoke outputs are wiring checks, not scientific evidence.
 
-## Install
+## Setup and data
 
 ```bash
 git clone https://github.com/kimYe121/uav-modality-decay.git
 cd uav-modality-decay
 pip install -e .
-```
-
-Python 3.10+. Training needs a CUDA-capable GPU; evaluation and the synthetic smoke test run on CPU.
-
-## Quick start
-
-```bash
-python scripts/check_env.py      # torch / CUDA / ultralytics sanity check
-python scripts/run_smoke.py      # synthetic end-to-end run, a few minutes
-```
-
-Outputs: `results/*_results.csv`, `results/*_summary.txt`, `results/*_curves.png`.
-
-![synthetic smoke run](docs/smoke_curves.png)
-
-A synthetic wiring check, not a result: the fusion curve starts above both single modalities and
-crosses the IR-only line at s≈0.15 (contamination) and s≈0.73 (zeroing).
-
-## Data
-
-The experiments use [ATR-UMOD](https://github.com/supercpy/ATR-UMOD) (ICCV 2025): 13,353 registered
-RGB–IR pairs, oriented boxes, 11 vehicle classes, six per-image condition attributes. Download it
-from the link in that repository (the paper's Baidu Pan code is `accd`) and unpack to:
-
-```
-data/ATR-UMOD/
-├── train/
-│   ├── images/       # visible
-│   ├── images_ir/    # infrared (grayscale)
-│   ├── labels/       # VOC-style XML, visible
-│   └── labels_ir/    # VOC-style XML, infrared
-└── test/
-    └── (same structure)
-```
-
-Convert to YOLO-OBB and carve a validation split by scene:
-
-```bash
+python scripts/check_env.py
 python scripts/prepare_atr.py check   --root data/ATR-UMOD
 python scripts/prepare_atr.py convert --root data/ATR-UMOD --out data/atr_umod
 ```
 
-`check` prints class names, instance counts, coordinate arity and attribute fields before anything is
-written. Do not split by random frame: adjacent frames from one flight are near-duplicates and inflate
-validation scores. Report mean ± std over at least three seeds.
+Python 3.10+ is required. Training requires CUDA. Small implementation checks are feasible with 8GB VRAM; full comparisons and ablations are better suited to a 24GB-class GPU. Rental duration should follow measured memory and epoch time.
 
-## Degradation protocols
+Use the official train/test split, IR labels for multimodal training, and a scene-isolated validation subset from train. Eleven classes are required for the reproduction experiments; `--classes` is only for preliminary debugging.
 
-| Protocol | Operation | What stays intact |
-|---|---|---|
-| P1 contamination | low light + read noise, fog scattering, blur, or additive noise on RGB | IR untouched |
-| P2 zeroing | RGB driven toward black | IR untouched |
-| P3 misregistration | IR frame translated by 2–20 px | both images individually clean |
+## Deployment metrics
 
-P1/P2 reduce single-modality quality. P3 keeps each stream's own quality at 1.0 and only breaks
-cross-modal correspondence — the case a single-modality quality score cannot catch.
-
-## Model views
-
-| View | Input |
-|---|---|
-| `rgb` | visible only |
-| `ir` | infrared only (grayscale replicated to three channels) |
-| `fused` | RGB with IR injected into the B channel (channel-concat proxy) |
-
-The fusion proxy is intentionally minimal: it cannot reweight a degraded stream, which is the failure
-mode under study. A learned two-stream baseline replaces it in the full experiments. Pixel averaging
-was tried first and abandoned — it preserves the clean stream's information and hides the effect,
-which locates the phenomenon at the feature level rather than the pixel level.
-
-## Metrics
-
-- `RA(s) = mAP(s) / mAP(clean)` — resistance ability, following MultiCorrupt
-- `NF(s)` — negative fusion gap, defined above
-- `s*` — first sign change of `NF`, linear interpolation between levels
-- slope of `mAP` against `s` — the weaker claim when no crossing occurs
-
-## Project layout
-
-```
-configs/                 experiment configs (smoke, pilot)
-docs/                    figures referenced by this README
-scripts/                 entry points: env check, data prep, smoke and pilot runs
-src/modality_decay/      package: synth, degrade, datasets, train, evaluate, metrics, plots
+```text
+NF(s,c) = mAP_fusion(s,c) - max(mAP_RGB(s,c), mAP_IR(s,c))
+RA(s)   = mAP(s) / mAP(clean)
 ```
 
-## References
-
-- ATR-UMOD / PCDF, ICCV 2025 — dataset and condition-aware fusion baseline
-- M²D-LIF, ICCV 2025 — names fusion degradation
-- RSC-MD, arXiv 2511.15433 — gradient-suppression account of fusion degradation
-- MultiCorrupt, arXiv 2402.11677 — RA / RRA corruption-robustness metrics
-- Ultra-Fusion, arXiv 2606.21223 — factor-wise reliability scheduling in SLAM
-- DRNet — dynamic routing under missing modalities
+`NF < 0` denotes fusion below the best unimodal model. A crossing `s*` is reported only when it exists and is stable, as a conditional empirical boundary rather than a deployment constant. Ground-truth `NF` is unavailable for online routing at deployment.
 
 ## License
 
