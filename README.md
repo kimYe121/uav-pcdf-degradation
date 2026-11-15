@@ -4,7 +4,7 @@
 
 <a name="chinese"></a>
 
-# uav-modality-decay
+# uav-pcdf-degradation
 
 **PCDF 核心机制复现与无人机 RGB-IR 旋转目标检测的部署退化研究。**
 
@@ -46,8 +46,8 @@
 ## 安装与检查
 
 ```bash
-git clone https://github.com/kimYe121/uav-modality-decay.git
-cd uav-modality-decay
+git clone https://github.com/kimYe121/uav-pcdf-degradation.git
+cd uav-pcdf-degradation
 pip install -e .
 python scripts/check_env.py
 ```
@@ -117,7 +117,7 @@ MIT，详见 [LICENSE](LICENSE)。
 
 <a name="english"></a>
 
-# uav-modality-decay
+# uav-pcdf-degradation
 
 **Reproducing core PCDF mechanisms and studying deployment-time degradation in UAV RGB-IR oriented object detection.**
 
@@ -159,8 +159,8 @@ Synthetic smoke outputs are wiring checks, not scientific evidence.
 ## Setup and data
 
 ```bash
-git clone https://github.com/kimYe121/uav-modality-decay.git
-cd uav-modality-decay
+git clone https://github.com/kimYe121/uav-pcdf-degradation.git
+cd uav-pcdf-degradation
 pip install -e .
 python scripts/check_env.py
 python scripts/prepare_atr.py check   --root data/ATR-UMOD
