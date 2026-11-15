@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "modality-decay"
 version = "0.1.0"
-description = "PCDF reproduction and unseen condition-composition generalization for UAV RGB-IR oriented detection"
+description = "PCDF reproduction and condition-decoupling audits for UAV RGB-IR oriented detection"
 requires-python = ">=3.10"
 dependencies = [
     "ultralytics>=8.3",

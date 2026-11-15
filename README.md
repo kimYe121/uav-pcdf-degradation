@@ -4,69 +4,71 @@
 
 <a name="chinese"></a>
 
-# PCDF 条件组合泛化与解耦审计
+# PCDF 方法级复现与研究问题审查
 
 **基于 ATR-UMOD / PCDF（ICCV 2025）的无人机 RGB-IR 旋转目标检测研究。**
 
-研究问题：当每个属性在训练中都出现过、但其**组合没有出现过**时，PCDF 的条件提示与动态融合还能否泛化？所谓的“条件无关特征”是否仍泄露可预测的条件信息？
+候选研究问题（尚未确认）：**PCD 所要求的条件特定/条件不变分离，是否真的发生？条件信息泄漏、目标判别能力与检测性能之间是什么关系？** 在确认其研究独立性、可实现性和最低成本证伪方案之前，不将其称为最终创新点。
 
-> **当前状态：研究设计与数据协议审计阶段。PCDF 尚未实现，尚无组合泛化或解耦结论。**
+> **当前状态：研究假设与复现设计阶段。PCDF 尚未实现，尚无解耦有效性或改进结论。**
 >
-> GitHub 仓库名 `uav-pcdf-degradation` 是早期命名；当前主线不再是固定退化阈值、状态观测或连续回退。
+> GitHub 仓库名 `uav-pcdf-degradation` 是早期命名；固定退化阈值、状态观测、连续回退均已退出主线。
 
-## 为什么不是重复 PCDF
+## 纠正：不再研究“未见条件组合”
 
-PCDF 已经实现逐样本、实时的条件动态融合，推理时不调用 CLIP 文本编码器。本项目不再提出“根据环境动态调权”，也不把 RGB-only、IR-only、concat 与 PCDF 的常规比较当作研究贡献。
+补充材料 B.2 已明确为减少条件稀疏和过拟合而合并条件：高度按 120m、角度按 30° 二分，时间合并为 Morning/Afternoon/Night，部分天气和光照也合并。此前将其限定为“只用于 Table 3 展示”是错误解读。
 
-原文及其补充材料留下了一个不同的问题：
+按论文的高度×角度×时间规则重新统计本地 XML，理论上的 12 种组合在 train 和 test 中**全部覆盖**，没有组合缺失。原始标签产生的更多细粒度组合不能用来证明论文实验口径下存在未见组合。因此，未见条件组合、组合泛化差和属性分解提示均不再作为当前研究计划。
 
-- 正文 Table 3 按高度、角度、天气等**单个属性的边际取值**报告结果，不是未见属性组合测试。
-- 补充材料 B.2 为缓解条件稀疏而合并部分条件；正文将 Foggy 的困难归因于雾浓度与能见度不一致。该合并明确用于 Table 3 的结果展示，不能未经证据扩展为训练提示也全部采用合并标签。
-- PCD 的证据主要是检测消融和特征图可视化，没有条件不变特征上的独立泄漏探针。
+## 候选问题：条件解耦是否真的成立（尚未确认）
 
-因此，本项目研究的是**组合外推与机制验证**，不是重复证明条件提示有用。
+PCDF 用 `Ldt` 让条件特定特征对齐文本条件教师，用 `Lirr` 降低两路条件不变特征与条件特征的相关性，再用 `Ldc` 保持目标判别能力。论文的 Table 4 消融和补充材料 F 节特征图说明这些模块有助于检测，但没有直接测量：
 
-## 研究假设与最小实验
+- 条件不变特征中还能否预测高度、角度、时间等条件；
+- 条件特定特征中是否保留目标类别信息；
+- 降低条件可预测性是否伴随着目标信息损失；
+- 条件泄漏与分条件检测性能是否存在稳定关系。
 
-### 数据可行性门
+这不是重复“动态调权”，而是检验 PCDF 的一个核心机制假设。
 
-先读取 XML 元数据，筛选样本量、类别和场景组均有足够支撑的**低维属性对**。留出某个属性组合训练，但保证各边际属性值仍在训练中出现；从已见组合中构造规模、类别、场景相近的参考集。
+## 可证伪实验
 
-当前全量审计得到 train 326 种、test 45 种“高度×角度×天气×光照×场景”组合，不能直接对全部六维组合做有效留出。按“地点编号＋日期”分组时，官方 train/test 有 19 个共享组；这不自动证明图像泄漏，但必须检查同采集序列与相邻帧，不能把官方“场景不重叠”与本地代理分组混为一谈。
+### 1. 方法级复现
 
-### 对照与改进
+在同一公开 OBB 骨架上实现 SCPL、PCD、CDF。所有论文未公开的结构选择均记录为 `implementation choice`，不承诺复原 63.1 mAP50。基础 concat 与动态门控只作机制对照，不作为研究创新。
 
-在同一公开 OBB 骨架、划分和训练预算下，保留必要的机制对照：
+### 2. 冻结特征探针
 
-1. 双流 concat：非条件融合下界；
-2. 数据驱动动态门控：区分“动态”与“显式条件监督”；
-3. PCDF 式 SCPL + PCD + CDF：待复现的核心模型；
-4. 属性分解提示：以可组合的属性表示替代整句联合条件教师，检验它是否改善未见组合；这是待证伪的候选改进，不预设有效。
+在严格隔离的场景组上训练/测试轻量探针：
 
-常规单模态和前期六通道结果仅用于工程检查，不再作为研究创新。
+| 特征 | 探针目标 | 预期机制 |
+|---|---|---|
+| 条件特定 `Fs` | 单属性条件标签 | 应具有条件可预测性 |
+| 条件不变 `Fv_rgb / Fv_ir` | 单属性条件标签 | 与原始特征、无 PCD 对照比较残留信息是否下降；不要求必然接近机会水平 |
+| `Fs / Fv` | 目标类别或目标存在性 | 检查条件分支是否混入目标信息、目标分支是否损失判别信息 |
 
-### 评价与证伪
+分别测试各单属性，报告 balanced accuracy、macro-F1、机会水平和场景组置信区间；不使用稀疏的六属性联合标签。探针比较线性模型与有限容量的非线性模型，避免把探针过拟合误判为特征泄漏。
 
-- 报告已见参考集、未见组合、宏平均及最弱组合上的 mAP50 / mAP50-95、分类别 AP 和场景组 bootstrap 区间。
-- 报告组合泛化差 `CGD = mAP_seen_reference - mAP_unseen`，同时保留绝对性能，避免用比例掩盖低基线。
-- 冻结特征后训练独立条件探针，报告条件 balanced accuracy / macro-F1，并保留目标检测指标；低相关不等于语义独立，探针结果不直接证明因果。
-- 多随机种子比较 PCDF、无显式条件动态门控和属性分解提示。
+### 3. 对照与最小改进
 
-**否定主线的情况**：有效留出组合不足；场景或类别混杂无法排除；PCDF 与无显式条件门控的未见组合差异不超过随机种子波动；或泄漏探针与泛化始终无关。此时报告阴性结果，不继续堆叠动态回退模块。
+比较原始 PCD、移除 `Lirr`、移除 PCD 三组，先检查 `Lirr` 是否真的降低泄漏及其检测代价。只有发现“泄漏高且影响检测”或“约束过强损害目标信息”时，才测试一个针对性调整，例如按目标区域约束条件不变性，而不是无依据地再增加门控模块。
 
-详细证据、复现边界与退出条件见 **[REPRODUCTION.md](REPRODUCTION.md)**。
+### 4. 退出条件
+
+若条件探针不能稳定复现、不同场景组结论相反，或 `Lirr` 的泄漏变化与检测性能始终无关，则报告阴性结果，不把探针相关关系包装成因果改进。若没有足够训练资源完成可信 PCDF 对照，则只交付复现与审计工具，不声称机制结论。
+
+完整证据和协议见 **[REPRODUCTION.md](REPRODUCTION.md)**。
 
 ## 当前进展
 
 | 部分 | 状态 |
 |---|---|
-| ATR-UMOD 成对转换与场景级划分工具 | 已实现；划分定义仍需针对本研究扩展 |
-| 全量条件组合与 train/test 元数据审计 | 已完成初步只读统计 |
+| ATR-UMOD 成对转换与场景级划分工具 | 已实现；正式协议需继续审计采集序列 |
+| 合并后条件覆盖统计 | 高度×角度×时间 12 种组合 train/test 全覆盖 |
 | RGB/IR 与六通道小子集基线 | 前期工程对照；不是 PCDF |
-| 未见条件组合划分生成器 | 待实现 |
 | SCPL / PCD / CDF | 待实现 |
-| 条件泄漏探针与属性分解提示 | 待实现、待证伪 |
-| 组合泛化结论 | **尚未获得** |
+| 条件与目标信息探针 | 待实现、待证伪 |
+| 解耦机制结论 | **尚未获得** |
 
 ## 安装与数据
 
@@ -91,10 +93,9 @@ data/ATR-UMOD/
 
 ## 主要依据
 
-- [PCDF 正文与补充材料（ICCV 2025）](https://openaccess.thecvf.com/content/ICCV2025/html/Chen_Fusion_Meets_Diverse_Conditions_A_High-diversity_Benchmark_and_Baseline_for_ICCV_2025_paper.html)：条件边际结果、PCD 消融与 Foggy 局限。
-- [CAFuser（RA-L 2025）](https://arxiv.org/abs/2410.10791)：粗细提示比较，但没有条件类别/组合留出。
-- [Distribution-Aligned Multimodal Fusion（CVPR 2026）](https://openaccess.thecvf.com/content/CVPR2026/papers/Hao_Distribution-Aligned_Multimodal_Fusion_for_Robust_Object_Detection_CVPR_2026_paper.pdf)：研究未见输入退化，不是语义条件组合。
-- [RASM-Net（2026）](https://doi.org/10.3390/rs18193288) 与 [QA2FDet（2026）](https://doi.org/10.3390/s26113443)：已覆盖局部可靠性、错位及小目标融合，故本项目不将“全局改局部”作为空白。
+- [PCDF 正文与补充材料（ICCV 2025）](https://openaccess.thecvf.com/content/ICCV2025/html/Chen_Fusion_Meets_Diverse_Conditions_A_High-diversity_Benchmark_and_Baseline_for_ICCV_2025_paper.html)：PCD 公式、Table 4 消融、补充 B.2 条件合并与 F 节特征图。
+- [D2E2-Det（TGRS 2026）](https://doi.org/10.1109/TGRS.2026.3714592)：共享/私有模态特征解耦，与 PCD 的条件特定/条件不变解耦目标不同。
+- [RASM-Net（2026）](https://doi.org/10.3390/rs18193288) 与 [QA2FDet（2026）](https://doi.org/10.3390/s26113443)：局部可靠性与错位融合已有人研究，不作为本项目空白。
 
 ## 许可证
 
@@ -104,35 +105,28 @@ MIT，详见 [LICENSE](LICENSE)。
 
 <a name="english"></a>
 
-# PCDF Condition-Composition Generalization and Decoupling Audit
+# PCDF Method-Level Reproduction and Research-Question Audit
 
 **UAV RGB-IR oriented object detection based on ATR-UMOD / PCDF (ICCV 2025).**
 
-Can PCDF generalize when every individual condition attribute was observed during training but their **combination was not**? Do the claimed condition-invariant features still contain predictable condition information?
+Candidate question, not yet confirmed: does the claimed condition-specific/condition-invariant separation actually occur, and how are condition leakage, object discriminability, and detection performance related? It must pass a research-independence, feasibility, and minimum-cost falsification review before being treated as the final contribution.
 
-> **Status: research design and data-protocol audit. PCDF is not yet implemented; no composition-generalization or decoupling result has been obtained.**
->
-> `uav-pcdf-degradation` is a legacy repository name. Fixed degradation thresholds, state observation, and continuous fallback are no longer the research plan.
+> **Status: hypothesis and reproduction design. PCDF is not yet implemented; no decoupling or improvement result has been obtained.**
 
-## Research gap
+## Correction: no unseen-composition claim
 
-PCDF already performs sample-specific dynamic fusion at inference without running the CLIP text encoder. This project does not reinvent dynamic weighting or present routine unimodal/concat comparisons as contributions.
+Supplementary Section B.2 explicitly merges conditions to alleviate sparsity and overfitting. The earlier interpretation that this was only for Table 3 was incorrect. Recomputing altitude×angle×time with the paper's rules gives 12 possible combinations, all present in both train and test. Finer raw-label combinations do not establish an unseen-composition gap under the paper's experimental condition system. Composition holdouts, CGD, and factorized prompts have therefore been removed from the plan.
 
-The paper reports marginal per-attribute results rather than held-out attribute combinations. Its PCD evidence consists of detection ablations and feature-map visualizations, without an independent condition-leakage probe. The supplementary merging rule is explicitly connected to Table 3 and must not be assumed to govern every training prompt without further evidence.
+## Falsifiable decoupling study
 
-The resulting question is **compositional extrapolation and mechanism verification**, not another demonstration that conditions help.
+Reproduce SCPL, PCD, and CDF on a disclosed OBB backbone, recording every unspecified component as an implementation choice. Train and test lightweight probes on scene-disjoint groups:
 
-## Hypothesis and falsification plan
+- Predict individual condition attributes from `Fs`, `Fv_rgb`, and `Fv_ir`.
+- Probe object category/presence to detect object information in the condition branch or discriminability loss in the invariant branches.
+- Compare full PCD, PCD without `Lirr`, and no PCD using balanced accuracy, macro-F1, chance level, detection metrics, and scene-group intervals.
+- Only if a reproducible leakage–detection trade-off exists, test one targeted adjustment rather than another generic gating module.
 
-1. Audit XML metadata and select well-supported low-dimensional attribute pairs. Hold out a combination while retaining every marginal attribute value in training. Construct a matched seen-combination reference set.
-2. Under one disclosed OBB backbone and budget, compare dual-stream concat, data-driven dynamic gating, the PCDF-style model, and a candidate attribute-factorized condition teacher. The last item is a falsifiable hypothesis, not a presumed improvement.
-3. Measure mAP50/mAP50-95, per-class AP, worst-group performance, scene-group bootstrap intervals, and `CGD = mAP_seen_reference - mAP_unseen`.
-4. Train independent condition probes on frozen condition-invariant features and report balanced accuracy/macro-F1 alongside detection retention. Decorrelation alone is not semantic independence, and probe associations are not causal proof.
-5. Repeat decisive comparisons across seeds.
-
-The local audit finds 326 five-attribute combinations in train and 45 in test, so exhaustive six-attribute holdouts are not statistically viable. Nineteen location-date groups occur in both official splits; this does not itself establish image leakage, but acquisition sequences and adjacent frames must be checked before drawing conclusions.
-
-The study stops with a negative result if supported holdouts are inadequate, confounding cannot be controlled, or the PCDF-versus-dynamic-gating difference is within seed variability. It will not fall back to another unverified gating module.
+A probe association is not causal proof. Report negative or group-inconsistent results rather than claiming successful decoupling or improvement.
 
 See **[REPRODUCTION.md](REPRODUCTION.md)** for source evidence, reproduction boundaries, and acceptance criteria.
 
@@ -140,13 +134,12 @@ See **[REPRODUCTION.md](REPRODUCTION.md)** for source evidence, reproduction bou
 
 | Part | State |
 |---|---|
-| Paired ATR-UMOD conversion and scene-level split utilities | Implemented; research-specific splitting remains |
-| Full condition-combination and split metadata audit | Initial read-only audit completed |
+| Paired ATR-UMOD conversion and scene-level split utilities | Implemented; acquisition-sequence audit remains |
+| Merged condition coverage | All 12 altitude-angle-time combinations occur in both splits |
 | Preliminary small-subset baselines | Engineering controls; not PCDF |
-| Composition holdout generator | Planned |
 | SCPL / PCD / CDF | Not implemented |
-| Condition probes and factorized prompts | Planned and unfalsified |
-| Composition-generalization conclusion | **Not established** |
+| Condition and object-information probes | Planned and unfalsified |
+| Decoupling conclusion | **Not established** |
 
 ```bash
 git clone https://github.com/kimYe121/uav-pcdf-degradation.git
