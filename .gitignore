@@ -16,6 +16,7 @@ results/
 /*.md
 !/README.md
 !/REPRODUCTION.md
+archive/
 
 # local tooling
 .workbuddy/
