@@ -7,18 +7,27 @@ __pycache__/
 # data and large artifacts
 data/
 runs/
+logs/
 results/
+pcdf_code.tar.gz
 *.pt
+*.pth
 *.onnx
 *.engine
+*.bin
+*.safetensors
+weights/
 
 # private research notes: only the public project guide is tracked
 /*.md
 !/README.md
 !/REPRODUCTION.md
 archive/
+output/
 
 # local tooling
+*.egg-info/
+.pytest_cache/
 .workbuddy/
 .idea/
 .vscode/

@@ -1,0 +1,12 @@
+# 排查档：短跑 8 epoch、每轮验证、验证只取 20 个 batch。
+#
+# 用途是看 loss/门控/阶段 2 是否正常，不作为论文结果。
+data:
+  workers: 8
+train:
+  epochs: 8
+  eval_interval: 1
+  val_batches: 20
+  save_period: 1
+  save_every_minutes: 10
+  save_every_steps: 0

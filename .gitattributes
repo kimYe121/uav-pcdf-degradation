@@ -1,0 +1,25 @@
+# 统一换行符：仓库内一律 LF，避免 Windows 提交 CRLF 后在 Linux 上
+# 让 `set -euo pipefail` 变成非法选项（bash 会把 \r 当成选项字符）。
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.json  text eol=lf
+*.csv   text eol=lf
+*.txt   text eol=lf
+
+# 二进制资产不做换行转换
+*.pt    binary
+*.pth   binary
+*.bin   binary
+*.safetensors binary
+*.jpg   binary
+*.jpeg  binary
+*.png   binary
+*.gz    binary
+*.pdf   binary
+*.docx  binary

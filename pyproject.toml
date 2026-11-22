@@ -3,18 +3,41 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "modality-decay"
-version = "0.1.0"
-description = "PCDF reproduction and condition-decoupling audits for UAV RGB-IR oriented detection"
+name = "pcdf-repro"
+version = "2.0.0"
+description = "Method-level reproduction of PCDF (ICCV 2025) for UAV RGB-IR oriented detection"
 requires-python = ">=3.10"
 dependencies = [
+    "torch>=2.1",
     "ultralytics>=8.3",
-    "numpy",
+    "transformers>=4.40",
     "opencv-python",
+    "numpy",
     "pyyaml",
-    "matplotlib",
-    "pandas",
+    "tqdm",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+plot = ["matplotlib>=3.7"]
+
+# 安装后可直接用命令，不必记 python -m 路径。
+[project.scripts]
+pcdf-train = "pcdf.cli.train:main"
+pcdf-eval = "pcdf.cli.evaluate:main"
+pcdf-smoke = "pcdf.cli.smoke:main"
+pcdf-overfit = "pcdf.cli.overfit:main"
+pcdf-check = "pcdf.cli.check_env:main"
+pcdf-prepare = "pcdf.cli.prepare_data:main"
+pcdf-plot = "pcdf.cli.plot_curves:main"
+pcdf-fetch-clip = "pcdf.cli.fetch_clip:main"
+pcdf-fetch-backbone = "pcdf.cli.fetch_backbone:main"
+pcdf-report = "pcdf.report:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

@@ -1,0 +1,114 @@
+# PCDF 基础配置（论文 Sec. 5.1 + 补充材料）。
+#
+# 结构说明：
+#   paths  仅这一段允许被环境变量覆盖（部署到容器时挂载点不同）
+#   data   配对数据集、增强、评估
+#   model  骨架、SCPL/PCD/CDF、检测头与损失增益
+#   train  优化器配方、周期保存、断点续训
+#
+# 覆盖优先级：本文件 < configs/profiles/<档位>.yaml < --set/CLI 参数 < 路径环境变量
+# 未知键会直接报错；字段间约束（如 guidance_dim == P5 通道）由 Config.validate 统一检查。
+
+paths:
+  data_root: data/atr_umod
+  # 留空表示 <data_root>/condition_index.csv，避免同一路径写两遍。
+  condition_index: ""
+  weights_dir: weights
+  runs_dir: runs
+  logs_dir: logs
+
+data:
+  train_split: train
+  val_split: val
+  modality_dir: ir        # 图像与标签所在模态目录
+  pair_dir: rgb           # 配对的另一模态目录
+  imgsz: [640, 512]       # (H, W)，论文 Sec. 5.1
+  batch: 16               # 论文 Sec. 5.1
+  workers: 4
+  names: [bus, car, crane, excavator, freight_car, motorcycle, suv, tank_truck, trailer, truck, van]
+
+  eval_conf: 0.001        # 保留完整 PR 曲线
+  eval_iou: 0.7
+  eval_max_det: 300
+  eval_thresholds: 0      # >0 时额外算 mAP50-95
+
+  # 增强：论文未说明，详见 docs/ARCHITECTURE.md。
+  # 有意关闭 mosaic（强制方形画布）与 HSV（会改 IR 通道）。
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  shear: 0.0
+  perspective: 0.0
+  flip_p: 0.5
+  flip_vertical: 0.0
+  fraction: 1.0
+
+model:
+  # 默认骨架 = YOLOv5s。依据：式 8 有 L_obj、一作 fork 了 yolov5 v7.0、
+  # 超参是 Ultralytics 默认配方。换成 YOLO11 系只需改四项，见 profiles/yolo11s.yaml。
+  backbone_yaml: yolov5.yaml
+  backbone_scale: s
+  widths: [128, 256, 256]   # YOLOv5s 的 P3/P4/P5
+  head_type: anchor         # anchor-based，含 objectness（式 8）
+  reg_max: 16               # 仅 head_type=v8 使用
+
+  # anchor 头的锚框（训练集 128,935 框 k-means，按面积升序、短边在前）。
+  anchors:
+    8: [[7, 13], [8, 15], [10, 21]]
+    16: [[13, 25], [15, 31], [18, 39]]
+    32: [[20, 49], [27, 80], [29, 89]]
+
+  tau: 0.15                 # 补充材料 Sec. G
+  lambda_dt: 0.01           # 式 9
+  lambda_irr: 0.003
+  lambda_dc: 0.01
+
+  condition_spec: configs/conditions.yaml
+  # 以下两项相对 paths.weights_dir 解析：换机器只需改 weights_dir。
+  encoder_weights: yolov5su.pt
+  text_encoder: clip-vit-base-patch16
+  freeze_text: true
+  pretrained_backbone: true
+
+  gate_hidden: 256
+  guidance_dim: 256         # 必须等于 widths[2]
+  gate_pool: max
+  text_cache_size: 8192
+
+  # 检测损失增益。两套头量纲不同，因此分开配置。
+  loss:
+    anchor_box: 0.05
+    anchor_cls: 0.5
+    anchor_obj: 1.0
+    anchor_thr: 0.25
+    v8_box: 7.5
+    v8_cls: 0.5
+    v8_dfl: 1.5
+
+train:
+  epochs: 50                # 论文 Sec. 5.1：两阶段各 50
+  lr: 0.01                  # SGD
+  momentum: 0.937
+  weight_decay: 0.0005
+  final_lr_ratio: 0.01      # 指数衰减终点比例（gamma 由它推导）
+  # 论文未提 warmup，严格复现时关闭；工程加速档见 profiles/48g.yaml。
+  warmup_epochs: 0.0
+  warmup_bias_lr: 0.1
+  grad_clip: 10.0
+  amp: true
+  grad_accum: 1
+  seed: 0
+  deterministic: true
+
+  eval_interval: 5          # <=0 表示不验证
+  val_batches: 0            # 0 表示完整验证集
+  max_batches: 0            # 0 表示完整 epoch
+
+  run_name: pcdf
+  profile: ""               # 由 load_config 写入，仅用于记录
+  resume: ""                # CLI --resume 优先；auto 读取 run_dir/last.pt
+
+  save_period: 1            # 每 N 个 epoch 写 checkpoints/epoch_XXXX.pt
+  save_every_minutes: 15    # 训练中每 N 分钟写 last.pt（含 mid-epoch）
+  save_every_steps: 0       # 0 表示关闭
+  keep_checkpoints: 3       # 只保留最近 N 个 epoch_*.pt

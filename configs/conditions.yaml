@@ -1,0 +1,103 @@
+# Condition taxonomy used by SCPL (paper Eq. 1 and Supplementary Sec. B.1).
+#
+# The six attributes are ordered exactly as they appear in the prompt template:
+#   "An aerial image, over {scenario}, at a altitude of {altitude},
+#    at an angle of {angle}, at {time}, in {weather}, in {illumination}."
+#
+# FIDELITY NOTE
+# -------------
+# ATR-UMOD releases weather / illumination / scenario as anonymous integer
+# codes.  The paper's official code->name table and its B.2 merging rules for
+# weather (After Rain + Rainy -> Cloudy) and illumination (Overexposure ->
+# Normal, Twilight -> Dim) are not public.  The defaults below therefore keep
+# each code as its own class with a neutral name.  Replace the names/codes when
+# the official mapping is available; no semantic label is invented here.
+
+subject: "An aerial image"
+
+attributes:
+  - key: scenario
+    source: location
+    prefix: "over"
+    kind: identity
+    codes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    names:
+      - "scenario 0"
+      - "scenario 1"
+      - "scenario 2"
+      - "scenario 3"
+      - "scenario 4"
+      - "scenario 5"
+      - "scenario 6"
+      - "scenario 7"
+      - "scenario 8"
+      - "scenario 9"
+      - "scenario 10"
+
+  # Supplementary B.2: altitude <= 120 m is low, > 120 m is high.
+  - key: altitude
+    source: UAVheight
+    prefix: "at a altitude of"
+    kind: threshold
+    threshold: 120
+    low: "low altitude (not above 120 meters)"
+    high: "high altitude (above 120 meters)"
+
+  # Supplementary B.2: angle <= 30 deg is low, > 30 deg is high.
+  - key: angle
+    source: UAVangle
+    prefix: "at an angle of"
+    kind: threshold
+    threshold: 30
+    low: "low angle (not above 30 degrees)"
+    high: "high angle (above 30 degrees)"
+
+  # Supplementary B.2: Morning [07:00,14:00), Afternoon [14:00,19:00),
+  # Night [19:00,07:00).
+  - key: time
+    source: time
+    prefix: "at"
+    kind: time
+    bins:
+      - {start: 7, end: 14, name: "morning"}
+      - {start: 14, end: 19, name: "afternoon"}
+      - {start: 19, end: 7, name: "night"}
+
+  # Paper Table 1 lists Sunny / Cloudy / Foggy / Snowy / Night after merging.
+  # Raw codes are kept anonymous until the official codebook is available.
+  # When the codebook is known, express B.2 with codes/groups/names, e.g.
+  #   codes:  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  #   groups: [0, 0, 0, 0, 1, 1, 2, 3, 3, 4]   # Rainy/After Rain -> Cloudy
+  #   names:  [sunny, cloudy, foggy, snowy, night]
+  - key: weather
+    source: weather
+    prefix: "in"
+    kind: identity
+    codes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    names:
+      - "weather type 0"
+      - "weather type 1"
+      - "weather type 2"
+      - "weather type 3"
+      - "weather type 4"
+      - "weather type 5"
+      - "weather type 6"
+      - "weather type 7"
+      - "weather type 8"
+      - "weather type 9"
+
+  # Paper Table 1 lists Normal / Dim / Near Night / Night after merging.
+  # The same codes/groups/names form can encode B.2 once the codebook is known.
+  - key: illumination
+    source: illumination
+    prefix: "in"
+    kind: identity
+    codes: [0, 1, 2, 3, 4, 5, 6]
+    names:
+      - "illumination level 0"
+      - "illumination level 1"
+      - "illumination level 2"
+      - "illumination level 3"
+      - "illumination level 4"
+      - "illumination level 5"
+      - "illumination level 6"

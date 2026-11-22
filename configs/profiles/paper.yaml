@@ -1,0 +1,11 @@
+# 论文 Sec. 5.1 严格档：batch 16、lr 0.01、warmup 关闭。
+#
+# 只写与 configs/pcdf.yaml 不同的项。这里显式列出是为了让"论文档"与
+# "工程加速档（48g）"的差异一眼可见——两档数字不可混用。
+data:
+  batch: 16
+  workers: 8
+train:
+  lr: 0.01
+  warmup_epochs: 0.0
+  final_lr_ratio: 0.01

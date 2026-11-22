@@ -1,0 +1,16 @@
+# CPU 验证档：在笔记本/无卡容器上把三阶段流程完整跑通。
+#
+# 这不是精度实验配置——只用来确认代码正确、数据管线通畅。
+# 显存/内存占用约为论文档的 1/16（320×256、batch 2）。
+data:
+  imgsz: [320, 256]
+  batch: 2
+  workers: 0
+  fraction: 0.02
+train:
+  amp: false            # CPU 上没有 AMP，显式关闭以免误以为在加速
+  eval_interval: 1
+  val_batches: 2
+  save_period: 0        # 不写 epoch_*.pt，省磁盘
+  save_every_minutes: 0
+  save_every_steps: 0

@@ -1,0 +1,23 @@
+# YOLO11s-OBB 骨架档：backbone 单分支 5.442M（n 档为 1.365M），
+# P3/P4/P5 = 256/256/512，guidance_dim 必须等于 P5 通道。
+#
+# 用途：论文未公开检测器结构，此档用于"容量是否为差距主因"的单变量对照，
+# 不是论文设置；报告里记为 implementation choice。
+#
+# 该档需要额外的 weights/yolo11s-obb.pt（仓库不附带）。没有权重时设
+# pretrained_backbone: false，或先下载官方权重。
+#
+# 用法（与默认档分开目录，避免覆盖）：
+#   python -m pcdf.cli.train --stage 0 --profile yolo11s --set paths.runs_dir=/data/runs_v11
+model:
+  backbone_yaml: yolo11s-obb.yaml
+  backbone_scale: s
+  widths: [256, 256, 512]
+  guidance_dim: 512
+  head_type: v8
+  encoder_weights: yolo11s-obb.pt
+data:
+  batch: 8
+train:
+  lr: 0.01
+  warmup_epochs: 0.0

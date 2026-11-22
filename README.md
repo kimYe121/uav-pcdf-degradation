@@ -1,162 +1,298 @@
-<p align="center">
-  <a href="#chinese">简体中文</a> &nbsp;·&nbsp; <a href="#english">English</a>
-</p>
+# PCDF 方法级复现（UAV RGB-IR 旋转目标检测）
 
-<a name="chinese"></a>
+**PCDF: Prompt-guided Condition-aware Dynamic Fusion**，ICCV 2025，ATR-UMOD 数据集。
+本仓库按论文正文与补充材料实现 SCPL、PCD、CDF 三个模块、三阶段训练、配对
+RGB/IR 数据管线和 OBB 评估。
 
-# PCDF 方法级复现与研究问题审查
+> **状态**：单元测试 83 项通过；三阶段端到端在 CPU 与 GPU（RTX 4060 8 GB，AMP）
+> 均已跑通。这不是官方代码复现：论文未公开检测器结构、neck、条件码本等细节，
+> 因此**不承诺复现 63.1 mAP50**，也不把本仓库数值与论文表格直接横比。
+> 结构逐条对应见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**；
+> 远端开发/部署照 **[docs/WORKFLOW.md](docs/WORKFLOW.md)** 操作。
 
-**基于 ATR-UMOD / PCDF（ICCV 2025）的无人机 RGB-IR 旋转目标检测研究。**
+## 论文方法一句话
 
-候选研究问题（尚未确认）：**PCD 所要求的条件特定/条件不变分离，是否真的发生？条件信息泄漏、目标判别能力与检测性能之间是什么关系？** 在确认其研究独立性、可实现性和最低成本证伪方案之前，不将其称为最终创新点。
+RGB/IR 双流编码器提取单模态特征；SCPL 用 CLIP 编码六类成像条件并做样本级硬门控；
+PCD 把特征解耦为条件特定 `F_s` 与条件不变 `F_v`，用 CMD、交叉协方差和辅助检测
+损失约束；CDF 由条件引导逐通道生成两模态权重，重加权 `F_v` 后拼接送入 OBB head。
+测试阶段不需要条件标注。
 
-> **当前状态：研究假设与复现设计阶段。PCDF 尚未实现，尚无解耦有效性或改进结论。**
->
-> GitHub 仓库名 `uav-pcdf-degradation` 是早期命名；固定退化阈值、状态观测、连续回退均已退出主线。
-
-## 纠正：不再研究“未见条件组合”
-
-补充材料 B.2 已明确为减少条件稀疏和过拟合而合并条件：高度按 120m、角度按 30° 二分，时间合并为 Morning/Afternoon/Night，部分天气和光照也合并。此前将其限定为“只用于 Table 3 展示”是错误解读。
-
-按论文的高度×角度×时间规则重新统计本地 XML，理论上的 12 种组合在 train 和 test 中**全部覆盖**，没有组合缺失。原始标签产生的更多细粒度组合不能用来证明论文实验口径下存在未见组合。因此，未见条件组合、组合泛化差和属性分解提示均不再作为当前研究计划。
-
-## 候选问题：条件解耦是否真的成立（尚未确认）
-
-PCDF 用 `Ldt` 让条件特定特征对齐文本条件教师，用 `Lirr` 降低两路条件不变特征与条件特征的相关性，再用 `Ldc` 保持目标判别能力。论文的 Table 4 消融和补充材料 F 节特征图说明这些模块有助于检测，但没有直接测量：
-
-- 条件不变特征中还能否预测高度、角度、时间等条件；
-- 条件特定特征中是否保留目标类别信息；
-- 降低条件可预测性是否伴随着目标信息损失；
-- 条件泄漏与分条件检测性能是否存在稳定关系。
-
-这不是重复“动态调权”，而是检验 PCDF 的一个核心机制假设。
-
-## 可证伪实验
-
-### 1. 方法级复现
-
-在同一公开 OBB 骨架上实现 SCPL、PCD、CDF。所有论文未公开的结构选择均记录为 `implementation choice`，不承诺复原 63.1 mAP50。基础 concat 与动态门控只作机制对照，不作为研究创新。
-
-### 2. 冻结特征探针
-
-在严格隔离的场景组上训练/测试轻量探针：
-
-| 特征 | 探针目标 | 预期机制 |
-|---|---|---|
-| 条件特定 `Fs` | 单属性条件标签 | 应具有条件可预测性 |
-| 条件不变 `Fv_rgb / Fv_ir` | 单属性条件标签 | 与原始特征、无 PCD 对照比较残留信息是否下降；不要求必然接近机会水平 |
-| `Fs / Fv` | 目标类别或目标存在性 | 检查条件分支是否混入目标信息、目标分支是否损失判别信息 |
-
-分别测试各单属性，报告 balanced accuracy、macro-F1、机会水平和场景组置信区间；不使用稀疏的六属性联合标签。探针比较线性模型与有限容量的非线性模型，避免把探针过拟合误判为特征泄漏。
-
-### 3. 对照与最小改进
-
-比较原始 PCD、移除 `Lirr`、移除 PCD 三组，先检查 `Lirr` 是否真的降低泄漏及其检测代价。只有发现“泄漏高且影响检测”或“约束过强损害目标信息”时，才测试一个针对性调整，例如按目标区域约束条件不变性，而不是无依据地再增加门控模块。
-
-### 4. 退出条件
-
-若条件探针不能稳定复现、不同场景组结论相反，或 `Lirr` 的泄漏变化与检测性能始终无关，则报告阴性结果，不把探针相关关系包装成因果改进。若没有足够训练资源完成可信 PCDF 对照，则只交付复现与审计工具，不声称机制结论。
-
-完整证据和协议见 **[REPRODUCTION.md](REPRODUCTION.md)**。
-
-## 当前进展
-
-| 部分 | 状态 |
-|---|---|
-| ATR-UMOD 成对转换与场景级划分工具 | 已实现；正式协议需继续审计采集序列 |
-| 合并后条件覆盖统计 | 高度×角度×时间 12 种组合 train/test 全覆盖 |
-| RGB/IR 与六通道小子集基线 | 前期工程对照；不是 PCDF |
-| SCPL / PCD / CDF | 待实现 |
-| 条件与目标信息探针 | 待实现、待证伪 |
-| 解耦机制结论 | **尚未获得** |
-
-## 安装与数据
-
-```bash
-git clone https://github.com/kimYe121/uav-pcdf-degradation.git
-cd uav-pcdf-degradation
-pip install -e .
-python scripts/check_env.py
-python scripts/prepare_atr.py check --root data/ATR-UMOD
-```
-
-使用 [ATR-UMOD](https://github.com/supercpy/ATR-UMOD) 的配准 RGB-IR 图像、OBB 标注与六类条件属性。正式复现采用 11 类和 IR 标签；`--classes` 只用于前期调试。8GB 显存可用于模块和小批量验证，完整实验建议 24GB 级 GPU；租卡时长必须由实测显存与单 epoch 时间决定。
+## 目录结构
 
 ```text
-data/ATR-UMOD/
-└── train|test/
-    ├── images/
-    ├── images_ir/
-    ├── labels/
-    └── labels_ir/
+.
+├── configs/
+│   ├── pcdf.yaml               # 唯一基础配置：paths / data / model / train
+│   ├── conditions.yaml         # 六属性码本、B.2 合并规则、提示模板
+│   └── profiles/               # 只写差异项的档位
+│       ├── paper.yaml          # 论文 Sec. 5.1（batch16 / lr0.01 / 无 warmup）
+│       ├── 48g.yaml            # 工程加速（batch32 / lr0.02 / warmup1）
+│       ├── debug.yaml          # 短跑排查
+│       ├── cpu.yaml            # 无卡验证（320×256 / batch2 / 关 AMP）
+│       └── yolo11s.yaml        # 骨架容量对照（需自备 yolo11s 权重）
+├── docs/
+│   ├── ARCHITECTURE.md         # 论文-代码逐条对应、张量形状、保真边界
+│   └── WORKFLOW.md             # 本地 → 服务器：同步/权重重装/训练/续训/排障
+├── scripts/                    # 薄启动器，实现都在 src/pcdf/cli
+│   ├── train.py  evaluate.py  smoke.py  overfit.py
+│   ├── check_env.py  prepare_atr.py  plot_curves.py
+│   └── server/                 # 服务器运维脚本（见下表）
+├── src/pcdf/
+│   ├── constants.py            # 类别顺序、stride、默认锚框、日志列
+│   ├── paths.py                # 项目根、环境变量、运行目录命名（唯一来源）
+│   ├── config.py               # 类型化配置：合并/校验/覆盖/路径归一
+│   ├── runtime.py              # 设备解析、随机种子、环境快照、原子写
+│   ├── checkpoint.py           # 检查点读写与续训调和
+│   ├── train.py                # Trainer：epoch 循环、验证、落盘
+│   ├── report.py               # 运行目录巡检（只读 JSON，不依赖 torch）
+│   ├── preflight.py            # 权重/数据就绪检查（不依赖 torch）
+│   ├── conditions.py           # 条件 id、提示构造、掩码
+│   ├── text_encoder.py         # 冻结 CLIP ViT-B/16 + 提示缓存
+│   ├── data.py                 # 6 通道配对数据集与 DataLoader
+│   ├── losses.py               # CMD / L_irr / L_dec / 检测损失装配
+│   ├── evaluate.py             # probIoU + 旋转 NMS + AP
+│   ├── models/
+│   │   ├── encoder.py          # 双流 backbone（YOLOv5 / YOLO11 两族）
+│   │   ├── heads.py            # 检测头工厂 + 统一初始化顺序
+│   │   ├── anchor_head.py      # 式 8 的 anchor 头与损失
+│   │   ├── blocks.py           # SCPLGate / S,V / CDF / PAN / 引导投影
+│   │   ├── scpl.py             # SCPL 前向 + straight-through
+│   │   ├── baseline.py         # 双流 concat baseline（阶段 0）
+│   │   └── pcdf.py             # 完整网络
+│   └── cli/                    # 所有命令行入口（python -m pcdf.cli.X）
+├── tests/                      # 83 项单元测试
+├── weights/                    # 预训练权重（gitignore）
+├── data/                       # ATR-UMOD（gitignore）
+└── runs/                       # 训练输出（gitignore）
 ```
 
-## 主要依据
+`archive/` 是早期“模态衰减”实验的历史代码，不参与当前复现；`output/` 是课程
+选题说明，不属于代码。
 
-- [PCDF 正文与补充材料（ICCV 2025）](https://openaccess.thecvf.com/content/ICCV2025/html/Chen_Fusion_Meets_Diverse_Conditions_A_High-diversity_Benchmark_and_Baseline_for_ICCV_2025_paper.html)：PCD 公式、Table 4 消融、补充 B.2 条件合并与 F 节特征图。
-- [D2E2-Det（TGRS 2026）](https://doi.org/10.1109/TGRS.2026.3714592)：共享/私有模态特征解耦，与 PCD 的条件特定/条件不变解耦目标不同。
-- [RASM-Net（2026）](https://doi.org/10.3390/rs18193288) 与 [QA2FDet（2026）](https://doi.org/10.3390/s26113443)：局部可靠性与错位融合已有人研究，不作为本项目空白。
+## 安装与权重
 
-## 许可证
-
-MIT，详见 [LICENSE](LICENSE)。
-
----
-
-<a name="english"></a>
-
-# PCDF Method-Level Reproduction and Research-Question Audit
-
-**UAV RGB-IR oriented object detection based on ATR-UMOD / PCDF (ICCV 2025).**
-
-Candidate question, not yet confirmed: does the claimed condition-specific/condition-invariant separation actually occur, and how are condition leakage, object discriminability, and detection performance related? It must pass a research-independence, feasibility, and minimum-cost falsification review before being treated as the final contribution.
-
-> **Status: hypothesis and reproduction design. PCDF is not yet implemented; no decoupling or improvement result has been obtained.**
-
-## Correction: no unseen-composition claim
-
-Supplementary Section B.2 explicitly merges conditions to alleviate sparsity and overfitting. The earlier interpretation that this was only for Table 3 was incorrect. Recomputing altitude×angle×time with the paper's rules gives 12 possible combinations, all present in both train and test. Finer raw-label combinations do not establish an unseen-composition gap under the paper's experimental condition system. Composition holdouts, CGD, and factorized prompts have therefore been removed from the plan.
-
-## Falsifiable decoupling study
-
-Reproduce SCPL, PCD, and CDF on a disclosed OBB backbone, recording every unspecified component as an implementation choice. Train and test lightweight probes on scene-disjoint groups:
-
-- Predict individual condition attributes from `Fs`, `Fv_rgb`, and `Fv_ir`.
-- Probe object category/presence to detect object information in the condition branch or discriminability loss in the invariant branches.
-- Compare full PCD, PCD without `Lirr`, and no PCD using balanced accuracy, macro-F1, chance level, detection metrics, and scene-group intervals.
-- Only if a reproducible leakage–detection trade-off exists, test one targeted adjustment rather than another generic gating module.
-
-A probe association is not causal proof. Report negative or group-inconsistent results rather than claiming successful decoupling or improvement.
-
-See **[REPRODUCTION.md](REPRODUCTION.md)** for source evidence, reproduction boundaries, and acceptance criteria.
-
-## Status and setup
-
-| Part | State |
-|---|---|
-| Paired ATR-UMOD conversion and scene-level split utilities | Implemented; acquisition-sequence audit remains |
-| Merged condition coverage | All 12 altitude-angle-time combinations occur in both splits |
-| Preliminary small-subset baselines | Engineering controls; not PCDF |
-| SCPL / PCD / CDF | Not implemented |
-| Condition and object-information probes | Planned and unfalsified |
-| Decoupling conclusion | **Not established** |
+Python ≥ 3.10，PyTorch 2.x。
 
 ```bash
-git clone https://github.com/kimYe121/uav-pcdf-degradation.git
-cd uav-pcdf-degradation
 pip install -e .
-python scripts/check_env.py
-python scripts/prepare_atr.py check --root data/ATR-UMOD
+python -m pcdf.cli.check_env          # 环境/依赖/权重/数据/提示自检
 ```
 
-Use all 11 classes and IR labels for the formal reproduction. An 8GB GPU is suitable for implementation checks and profiling; full experiments are better suited to a 24GB-class GPU. Rental duration must follow measured memory and epoch time.
+权重只有两项，路径由配置推导，不靠手工约定：
+
+```text
+weights/yolov5su.pt                 # 骨架（默认配置；Ultralytics 资产）
+weights/clip-vit-base-patch16/      # CLIP 文本编码器
+  ├── config.json  vocab.json  merges.txt
+  ├── tokenizer_config.json  special_tokens_map.json
+  ├── pytorch_model.bin
+  └── text_projection.pt            # 下载脚本自动生成
+```
+
+一条命令装齐（ModelScope 优先，失败自动回退 hf-mirror / HF）：
+
+```bash
+python -m pcdf.cli.fetch_backbone    # 下载并按 backbone_scale 校验档位
+python -m pcdf.cli.fetch_clip        # 下载 CLIP 并抽取 text_projection
+```
+
+`fetch_backbone` 会反查权重的真实规模（n/s/m/l/x）与 `model.backbone_scale`
+比对，不一致直接删除并非零退出——避免"配置写 s、权重是 n"这类隐蔽事故。
+
+## 数据
+
+```text
+data/atr_umod/
+├── ir/images/{train,val,test}/*.jpg
+├── ir/labels/{train,val,test}/*.txt      # YOLO-OBB，8 坐标
+├── rgb/images/{train,val,test}/*.jpg
+└── condition_index.csv
+```
+
+从原始数据重建（train 10054 / val 1796 / test 1503，val 按地点+日期场景组留出）：
+
+```bash
+python -m pcdf.cli.prepare_data check   --root data/ATR-UMOD
+python -m pcdf.cli.prepare_data convert --root data/ATR-UMOD --out data/atr_umod --val-frac 0.15
+```
+
+## 快速开始
+
+```bash
+python -m pytest -q                                     # 83 项单元测试
+python -m pcdf.cli.check_env                            # 自检
+python -m pcdf.cli.smoke --device cpu                    # 无卡也能跑通三阶段
+python -m pcdf.cli.smoke --device 0                      # 有卡（默认 auto）
+```
+
+冒烟依次执行：baseline → 阶段 1（文本引导）→ 阶段 2（视觉引导）→ 旋转 mAP
+评估，末尾打印 `[smoke] OK`，默认清理 `runs/_smoke`。
+
+## 服务器运行（智川云 / Linux 容器）
+
+完整步骤见 **[docs/WORKFLOW.md](docs/WORKFLOW.md)**，这里只列脚本职责：
+
+| 脚本 | 用途 |
+|---|---|
+| `setup.sh` | 安装 editable、补依赖、下载/校验权重、跑自检；`--force-weights` 重装权重 |
+| `prepare_data.sh` | 原始 ATR-UMOD → YOLO-OBB + `condition_index.csv` |
+| `smoke.sh` | `pytest` + 三阶段端到端；`--bench [--batch N]` 追加 50 step 基准 |
+| `train.sh` | 单阶段训练，自动续训：`baseline` / `stage1` / `stage2` / `resume0..2`；`--dry-run` |
+| `train_all.sh` | 三阶段一键，未跑满不会误开下一阶段 |
+| `eval.sh` | val/test mAP，默认取阶段 2 的 `best.pt` |
+| `status.sh` | GPU、磁盘、三阶段进度、最新日志；`--json` 机器可读 |
+
+```bash
+bash scripts/server/setup.sh
+bash scripts/server/prepare_data.sh --raw /root/rivermind-data/ATR-UMOD
+bash scripts/server/smoke.sh --bench --batch 8
+tmux new -s pcdf 'bash scripts/server/train_all.sh --profile paper'
+bash scripts/server/status.sh
+bash scripts/server/eval.sh --split test --map50-95
+```
+
+**所有路径与设备都可环境变量覆盖**，脚本里没有写死的绝对路径或超参：
+
+```bash
+PYTHON=/opt/conda/bin/python DEVICE=1 \
+DATA_ROOT=/data/atr_umod WEIGHTS_DIR=/data/weights RUNS_DIR=/data/runs \
+bash scripts/server/train.sh stage1 --profile 48g
+```
+
+变量清单：`PYTHON`、`DEVICE`、`PROFILE`、`RUN_NAME`、`DATA_ROOT`、`WEIGHTS_DIR`、
+`RUNS_DIR`、`LOG_DIR`、`TEE`、`CLIP_SOURCE`、`PCDF_BACKBONE_URL`。
+
+若存在 `/root/rivermind-data`（数据盘），`RUNS_DIR`/`LOG_DIR` 默认落到
+`/root/rivermind-data/pcdf/{runs,logs}`，容器重建不丢检查点。
+
+## 配置
+
+三层合并，优先级从低到高：
+
+```
+configs/pcdf.yaml  <  configs/profiles/<档位>.yaml  <  --set / CLI 参数  <  路径环境变量
+```
+
+- **未知键直接报错**，YAML 拼写错误不会静默改变实验；
+- **路径只解析一次**：加载后全部转绝对路径，从任意 cwd 启动都指向同一份资源；
+- **交叉约束集中校验**：`guidance_dim == widths[2]`、`imgsz % 32 == 0`、
+  `head_type ∈ {v8, anchor}`、锚框覆盖三个 stride 等，建模前就失败。
+
+| 档位 | batch | lr | warmup | workers | 用途 |
+|---|---:|---:|---:|---:|---|
+| `paper` | 16 | 0.01 | 0 | 8 | 对齐论文 Sec. 5.1，用于最终报告 |
+| `48g` | 32 | 0.02 | 1 | 12 | 工程加速；lr 线性缩放，不等同论文设置 |
+| `debug` | 16 | 0.01 | 0 | 8 | 8 epoch、每轮验证，排查用 |
+| `cpu` | 2 | 0.01 | 0 | 0 | 320×256、关 AMP，无卡验证 |
+
+任意字段可临时覆盖，不必新建文件：
+
+```bash
+python -m pcdf.cli.train --stage 1 --set train.lr=0.005 --set data.workers=8
+```
+
+## 训练
+
+论文协议：SGD，lr 0.01，momentum 0.937，weight decay 0.0005，640×512，batch 16，
+阶段 1/2 各 50 epochs，指数衰减；baseline（阶段 0）论文未给轮数，按同配置 50。
+
+```bash
+python -m pcdf.cli.train --stage 0 --device 0    # baseline（Table 4，58.4）
+python -m pcdf.cli.train --stage 1 --device 0    # SCPL+CDF，主干从 baseline 冻结
+python -m pcdf.cli.train --stage 2 --device 0    # full pipeline，从阶段 1 初始化
+```
+
+输出：`runs/pcdf_stage{0,1,2}/{config.yaml,meta.json,log.csv,metrics.json,
+last.pt,best.pt,checkpoints/}`。
+
+### 断点续训
+
+检查点保存**完整训练状态**：模型、优化器、调度器、AMP scaler、`next_epoch`、
+`step_in_epoch`、`global_step`、`epochs_total`、best mAP、日志历史、随机数状态。
+
+```bash
+python -m pcdf.cli.train --stage 1 --resume auto
+python -m pcdf.cli.train --stage 2 --resume runs/pcdf_stage2/checkpoints/epoch_0010.pt
+```
+
+续训规则是固定不变式（详见 `src/pcdf/checkpoint.py`）：
+
+- **结构字段必须一致**（widths / head_type / backbone / guidance_dim / 类别名），
+  否则报错并提示用训练时的 `--profile`；
+- **训练配方以检查点为准**（batch / lr / warmup / grad_accum / amp），48G 档重启
+  不会退回 batch16/lr0.01；
+- **命令行显式参数优先**，并在日志里说明被覆盖的项。
+
+恢复时用 `seed + epoch` 重建 DataLoader 并跳过已训练 step；`SIGTERM` 会在当前
+step 结束后写 `last.pt` 退出；异常退出另写 `crash.pt`。周期保存按配置
+（`save_every_minutes` / `save_every_steps`），不写在 shell 里。
+
+## 评估
+
+```bash
+python -m pcdf.cli.evaluate --checkpoint runs/pcdf_stage2/best.pt --split val
+python -m pcdf.cli.evaluate --checkpoint runs/pcdf_stage2/best.pt --split test --map50-95
+```
+
+模型结构取自检查点内的配置快照，数据/权重路径取当前环境，因此**换机器或换档位
+评估不会报 shape 错**。输出 mAP50、逐类 AP50、预测/GT 数量，并写
+`eval_{split}.json`。
+
+## 关键参数
+
+| 参数 | 值 | 来源 |
+|---|---|---|
+| 输入尺寸 | 640×512 | 论文 Sec. 5.1 |
+| batch | 16 | 论文 Sec. 5.1（小显存覆盖） |
+| epochs | 50 + 50 | 论文 Sec. 5.1 |
+| 优化器 | SGD, lr 0.01, mom 0.937, wd 5e-4 | 论文 Sec. 5.1 |
+| 骨架 | YOLOv5s backbone（4.303 M/分支） | 论文未公开，见 ARCHITECTURE 5.4 |
+| 检测头 | anchor-based，含 objectness | 式 8 的 `L_obj` |
+| 文本编码器 | CLIP ViT-B/16，冻结 | 论文 Sec. 5.1 |
+| `τ` | 0.15 | 补充 Sec. G |
+| `λ1/λ2/λ3` | 0.01 / 0.003 / 0.01 | 论文 Eq. 9 |
+| 条件合并 | 高度 120 m、角度 30°、时间三段 | 补充 B.2 |
+
+## 与论文的保真边界
+
+已按论文实现：双流编码器、SCPL 提示与硬门控、三支解耦、CMD/`L_irr`/`L_dc`、
+逐通道软门控、三阶段流程、条件合并规则、IR 标签、旋转框评估。
+
+论文未公开、由本仓库补齐（详见 `docs/ARCHITECTURE.md` 第 5 节）：
+
+- 检测器 family / neck / OBB head：YOLOv5s backbone + 自建 PAN + anchor OBB head；
+- `S/V` 内部结构、`F(·,·)` 融合方式、CDF 投影层；
+- 阶段 1 的引导来源（本实现用 `F_t`，阶段 2 用 `L_dt` 对齐到 `F_s`）；
+- 硬门控的 straight-through 梯度；
+- 天气/光照/场景的官方码本与 B.2 合并映射（默认匿名类）；
+- 增强、AMP、warmup、梯度裁剪。
+
+## 硬件实测
+
+RTX 4060 Laptop 8 GB、AMP、640×512：
+
+| 配置 | 峰值显存 |
+|---|---|
+| 阶段 1，batch 4 | 0.62 GB |
+| 阶段 2，batch 4（含两个辅助 head 前向） | 2.90 GB |
+
+阶段 1 的前向不经过 PCD（Fig. 10 Stage I），实现按需跳过三支解耦，省掉约
+三分之一计算量。batch 16 建议 24 GB 级显卡；先用 `smoke.sh --bench --batch N`
+确认峰值再决定。
+
+## 引用
+
+```bibtex
+@inproceedings{chen2025pcdf,
+  title={Fusion Meets Diverse Conditions: A High-diversity Benchmark and Baseline
+         for UAV-based Multimodal Object Detection with Condition Cues},
+  author={Chen, Chen and Bin, Kangcheng and Hu, Ting and Qi, Jiahao and Liu, Xingyue
+          and Liu, Tianpeng and Liu, Zhen and Liu, Yongxiang and Zhong, Ping},
+  booktitle={ICCV},
+  year={2025}
+}
+```
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
----
-
-<p align="center">
-  <a href="#chinese">简体中文</a> &nbsp;·&nbsp; <a href="#english">English</a>
-</p>
+MIT，见 [LICENSE](LICENSE)。

@@ -1,0 +1,11 @@
+# 48G 显卡工程加速档：batch 32，学习率线性缩放 0.02，warmup 1 epoch。
+#
+# 注意：这不是论文严格设置，只用于吞吐/稳定性验证；正式对比请用 paper 档。
+# 报告里必须注明所用档位，不能与 paper 档的数字混用。
+data:
+  batch: 32
+  workers: 12
+train:
+  lr: 0.02
+  warmup_epochs: 1.0
+  final_lr_ratio: 0.01
