@@ -22,7 +22,11 @@ data:
   val_split: val
   modality_dir: ir        # 图像与标签所在模态目录
   pair_dir: rgb           # 配对的另一模态目录
-  imgsz: [640, 512]       # (H, W)，论文 Sec. 5.1
+  # (H, W)。源图就是 640×512（W×H），所以必须是 [512, 640]：
+  # RandomPerspective 会直接 warp 到目标尺寸（不是 letterbox 加边），写成
+  # [640, 512] 等于把宽 640→512 压缩、高 512→640 插值，横向细节白丢 20%
+  # 且目标几何被非等比拉伸 1.56 倍。论文 Sec. 5.1 的 640×512 是 W×H。
+  imgsz: [512, 640]
   batch: 16               # 论文 Sec. 5.1
   workers: 4
   names: [bus, car, crane, excavator, freight_car, motorcycle, suv, tank_truck, trailer, truck, van]
@@ -44,19 +48,19 @@ data:
   fraction: 1.0
 
 model:
-  # 默认骨架 = YOLOv5s。依据：式 8 有 L_obj、一作 fork 了 yolov5 v7.0、
-  # 超参是 Ultralytics 默认配方。换成 YOLO11 系只需改四项，见 profiles/yolo11s.yaml。
+  # 骨架固定为 YOLOv5s。依据：式 8 有 L_obj、一作 fork 了 yolov5 v7.0、
+  # 超参是 Ultralytics 默认配方。本项目不再提供其它骨架档位。
   backbone_yaml: yolov5.yaml
   backbone_scale: s
   widths: [128, 256, 256]   # YOLOv5s 的 P3/P4/P5
-  head_type: anchor         # anchor-based，含 objectness（式 8）
-  reg_max: 16               # 仅 head_type=v8 使用
-
-  # anchor 头的锚框（训练集 128,935 框 k-means，按面积升序、短边在前）。
-  anchors:
-    8: [[7, 13], [8, 15], [10, 21]]
-    16: [[13, 25], [15, 31], [18, 39]]
-    32: [[20, 49], [27, 80], [29, 89]]
+  # 融合后的颈部。论文 Fig. 4 图例写明 F = Channel Concatenation（无额外颈部），
+  # 但 v5 系检测器（baseline 58.4 是一个双流检测器）不可能没有颈部。
+  #   pan    : 拼接后接 PAN（默认，v5 标配）
+  #   concat : 严格按图 4，拼接后直接进检测头（头输入变成 2C）
+  neck: pan
+  # 检测头固定为 ultralytics OBB（anchor-free + DFL），没有锚框、没有 objectness。
+  # 早期版本自写的 anchor 头已删除：同一 16 图 overfit，自写头 600 步 0.61，
+  # OBB 头 300 步 0.96（见 docs/STATE.md）。
 
   tau: 0.15                 # 补充材料 Sec. G
   lambda_dt: 0.01           # 式 9
@@ -74,16 +78,6 @@ model:
   guidance_dim: 256         # 必须等于 widths[2]
   gate_pool: max
   text_cache_size: 8192
-
-  # 检测损失增益。两套头量纲不同，因此分开配置。
-  loss:
-    anchor_box: 0.05
-    anchor_cls: 0.5
-    anchor_obj: 1.0
-    anchor_thr: 0.25
-    v8_box: 7.5
-    v8_cls: 0.5
-    v8_dfl: 1.5
 
 train:
   epochs: 50                # 论文 Sec. 5.1：两阶段各 50

@@ -33,9 +33,7 @@ from .common import add_config_args, add_device_arg, build_config
 # 训练/评估实际依赖的符号。任何一项失败都意味着代码与已装版本不匹配。
 PROBES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("ultralytics Conv / C3k2", "ultralytics.nn.modules", ("Conv", "C3k2")),
-    ("ultralytics OBB head", "ultralytics.nn.modules.head", ("OBB",)),
-    ("ultralytics OBBModel", "ultralytics.nn.tasks", ("OBBModel", "initialize_weights")),
-    ("ultralytics v8OBBLoss", "ultralytics.utils.loss", ("v8OBBLoss",)),
+    ("ultralytics DetectionModel", "ultralytics.nn.tasks", ("DetectionModel", "initialize_weights")),
     ("ultralytics batch_probiou", "ultralytics.utils.metrics", ("batch_probiou",)),
     ("ultralytics NMS", "ultralytics.utils.nms", ("non_max_suppression",)),
     ("ultralytics dataset", "ultralytics.data.dataset", ("YOLODataset",)),

@@ -22,6 +22,14 @@ def test_eval_parser_accepts_two_checkpoint_spellings() -> None:
     assert parser.parse_args(["--ckpt", "b.pt"]).checkpoint == "b.pt"
 
 
+def test_eval_parser_offers_both_splits() -> None:
+    """`--split both` 必须可用：val 与 test 在本项目差 16 点，口径要能一次看全。"""
+    from pcdf.cli.evaluate import BOTH_SPLITS
+
+    assert BOTH_SPLITS == ("val", "test")
+    assert build_eval_parser().parse_args(["--checkpoint", "a.pt", "--split", "both"]).split == "both"
+
+
 def test_parse_set_rejects_bad_format() -> None:
     with pytest.raises(SystemExit):
         common.parse_set(["train.lr"])

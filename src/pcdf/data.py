@@ -26,6 +26,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import random
+
 import cv2
 import numpy as np
 import torch
@@ -35,6 +37,7 @@ from ultralytics.cfg import get_cfg
 from ultralytics.data.augment import Compose, LetterBox, RandomFlip, RandomPerspective
 from ultralytics.data.dataset import YOLODataset
 
+from .augment_obb import hsv_jitter_rgb, mosaic_canvas
 from .config import DataConfig
 from .conditions import ConditionTable
 
@@ -61,6 +64,9 @@ class PairedRGBIRDataset(YOLODataset):
         self.condition_table = table
         self.pair_dir = pair_dir
         self.modality_dir = modality_dir
+        # 划分名取自 img_path 的最后一级（.../ir/images/{split}）。条件索引里
+        # stem 只在划分内唯一，取条件必须带上它。
+        self.split_name = Path(str(img_path)).name
         self.augment = augment
         self.degrees = float(hyp.degrees)
         self.translate = float(hyp.translate)
@@ -69,6 +75,12 @@ class PairedRGBIRDataset(YOLODataset):
         self.perspective = float(hyp.perspective)
         self.flip_p = float(hyp.flip_p)
         self.flip_vertical = float(hyp.flip_vertical)
+        # mosaic / HSV：Hyp 里存原始值，mosaic_p 可被训练器在收尾阶段置 0
+        # （对应 YOLOv5 的 close_mosaic）。
+        self.mosaic_p = float(hyp.mosaic)
+        self.hsv_h = float(hyp.hsv_h)
+        self.hsv_s = float(hyp.hsv_s)
+        self.hsv_v = float(hyp.hsv_v)
         super().__init__(
             img_path=str(img_path),
             imgsz=imgsz,
@@ -124,7 +136,9 @@ class PairedRGBIRDataset(YOLODataset):
                     scale=self.scale,
                     shear=self.shear,
                     perspective=self.perspective,
-                    size=(height, width),
+                    # Ultralytics 的 size 是 (W, H)，本仓库 imgsz 是 (H, W)。
+                    # 传反会先 warp 成竖图再被 LetterBox 缩到 0.8 加灰边。
+                    size=(width, height),
                     preserve_obb=True,
                 )
             ]
@@ -143,6 +157,10 @@ class PairedRGBIRDataset(YOLODataset):
             )
             compose = Compose(transforms)
         else:
+            # 评估与训练同几何：训练分支先由 RandomPerspective 按 (W,H) warp 到
+            # 目标尺寸，再由 LetterBox 对齐 stride；源图 640×512 在 imgsz=(512,640)
+            # 时 ratio=1、无灰边，评估分支同一个 LetterBox 即可对齐训练几何。
+            # 不要改成各向异性 warp：实测那样 eval 掉到 37.12（见 STATE §9）。
             compose = Compose(
                 [
                     LetterBox(
@@ -171,10 +189,61 @@ class PairedRGBIRDataset(YOLODataset):
         return compose
 
     # ---------------------------------------------------------------- 条件 id
+    def get_image_and_label(self, index: int) -> dict[str, Any]:
+        """先做 mosaic / HSV，再交给 Ultralytics 的几何增强与格式化。
+
+        mosaic 用多边形做裁剪（:func:`pcdf.augment_obb.mosaic_canvas`），
+        因此不碰旋转框的角度参数化；后续 ``RandomPerspective(preserve_obb=True)``
+        会在这个多边形基础上继续变换。
+        """
+        if self.augment and self.mosaic_p > 0 and np.random.rand() < self.mosaic_p:
+            label = self._mosaic_label(index)
+        else:
+            label = super().get_image_and_label(index)
+        if self.augment and max(self.hsv_h, self.hsv_s, self.hsv_v) > 0:
+            label["img"] = hsv_jitter_rgb(label["img"], self.hsv_h, self.hsv_s, self.hsv_v)
+        return label
+
+    def _mosaic_label(self, index: int) -> dict[str, Any]:
+        """取当前样本 + 3 个随机样本拼 2×2 后随机裁回输入尺寸。"""
+        height, width = (self.imgsz, self.imgsz) if isinstance(self.imgsz, int) else tuple(self.imgsz)
+        picks = [index] + [int(i) for i in np.random.randint(0, len(self.labels), 3)]
+        tiles: list[tuple[np.ndarray, list[np.ndarray], np.ndarray]] = []
+        for idx in picks:
+            img, _, _ = self.load_image(idx)
+            if img.ndim == 2:
+                img = img[..., None]
+            lab = self.labels[idx]
+            tiles.append((img, lab["segments"], lab["cls"].reshape(-1)))
+
+        crop, segments, cls = mosaic_canvas(tiles, (height, width))
+        boxes = np.zeros((len(segments), 4), dtype=np.float32)
+        for i, poly in enumerate(segments):
+            poly = np.asarray(poly).reshape(-1, 2)
+            lo, hi = poly.min(axis=0), poly.max(axis=0)
+            boxes[i] = (lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1])
+
+        label: dict[str, Any] = {
+            "im_file": self.labels[index]["im_file"],
+            "ori_shape": (height, width),
+            "resized_shape": (height, width),
+            "ratio_pad": (1.0, 1.0),  # Ultralytics 要的是 (gain_h, gain_w) 扁平对
+            "img": crop,
+            "cls": cls.reshape(-1, 1),
+            "bboxes": boxes,
+            "segments": segments,
+            "keypoints": None,
+            "bbox_format": "xywh",
+            "normalized": True,
+        }
+        return self.update_labels_info(label)
+
     def __getitem__(self, index: int) -> dict[str, Any]:
         sample = super().__getitem__(index)
         stem = Path(self.labels[index]["im_file"]).stem
-        sample["cond"] = torch.from_numpy(self.condition_table.ids(stem)).long()
+        sample["cond"] = torch.from_numpy(
+            self.condition_table.ids_for(stem, self.split_name)
+        ).long()
         return sample
 
     @staticmethod
@@ -189,8 +258,8 @@ class PairedRGBIRDataset(YOLODataset):
 def _augmentation_hyp(cfg: DataConfig):
     """把配置里的增强参数写成 Ultralytics 的 hyp 对象。
 
-    只覆盖用到的字段；mosaic / mixup / copy-paste / HSV 一律关闭并写明原因，
-    避免 Ultralytics 默认值在未来版本里悄悄生效。
+    只覆盖用到的字段；mixup / copy-paste 由本仓库显式关闭（论文未提，且会
+    改标签几何），mosaic / HSV 由配置决定（默认 0 = 关闭）。
     """
     hyp = get_cfg()
     hyp.degrees = cfg.degrees
@@ -200,11 +269,15 @@ def _augmentation_hyp(cfg: DataConfig):
     hyp.perspective = cfg.perspective
     hyp.flip_p = cfg.flip_p
     hyp.flip_vertical = cfg.flip_vertical
-    hyp.mosaic = 0.0  # 会强制方形画布，破坏 640×512 的矩形输入
+    # mosaic / HSV 由本仓库自己在 PairedRGBIRDataset 里实现（见 augment_obb），
+    # 因此 Ultralytics 自带的 Mosaic/MixUp 一定要关掉，避免叠加。
+    hyp.mosaic = cfg.mosaic
     hyp.mixup = 0.0
     hyp.cutmix = 0.0
     hyp.copy_paste = 0.0
-    hyp.hsv_h = hyp.hsv_s = hyp.hsv_v = 0.0  # 会改动复制成 3 通道的 IR
+    hyp.hsv_h = cfg.hsv_h
+    hyp.hsv_s = cfg.hsv_s
+    hyp.hsv_v = cfg.hsv_v
     return hyp
 
 
@@ -293,7 +366,17 @@ def _make_loader(
         drop_last=False,
         persistent_workers=persistent and n_workers > 0,
         generator=generator,
+        # Linux 上 DataLoader 用 fork，各 worker 会继承同一个 RNG 状态，导致
+        # 同一步里多个 worker 抽出完全相同的增强参数（mosaic/HSV 会同步）。
+        worker_init_fn=_seed_worker if n_workers > 0 else None,
     )
+
+
+def _seed_worker(worker_id: int) -> None:
+    """按 ``torch`` 派生的种子重置每个 worker 的 random / numpy 状态。"""
+    worker_seed = torch.initial_seed() % 2**32
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
 
 
 def build_loader(

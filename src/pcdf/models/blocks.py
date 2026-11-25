@@ -87,14 +87,18 @@ class SCPLGate(nn.Module):
 
 
 class ChannelNormSoftGate(nn.Module):
-    """CDF 的逐通道归一化软门控（论文式 10-11）。
+    """CDF 的逐通道归一化软门控（论文式 10-11，Fig. 4）。
 
-    每个尺度把同一个引导向量投影为 ``2*C_l`` 个 logits，reshape 成
-    ``(B, 2, C_l, 1, 1)`` 后在模态维做 softmax。于是每个通道都有
-    ``W_rgb + W_ir = 1``，与式 10 的逐通道归一化一致。
+    输入按 Fig. 4 的箭头是**三路**：条件引导（绿）、条件不变 RGB 特征（蓝）、
+    条件不变 IR 特征（橙）——软门控要"看着当前特征"再决定这个通道该信谁，
+    只喂引导会让权重与特征内容脱钩。因此每层的投影输入是
+    ``[guidance, GAP(F_v,rgb), GAP(F_v,ir)]``。
 
-    注意：softmax 沿“模态”维，而不是沿通道维；这样才能得到论文中
-    ``[0,1]`` 范围内、两模态互补的权重。
+    每个尺度投影出 ``2*C_l`` 个 logits，reshape 成 ``(B, 2, C_l, 1, 1)`` 后在
+    模态维做 softmax：``W_rgb + W_ir = 1``（逐通道），与式 10 一致。
+
+    注意：softmax 沿"模态"维，不是沿通道维；这样才得到论文中 ``[0,1]`` 内、
+    两模态互补的权重曲线（Fig. 4 中间那张以 0.5 为中心的图）。
     """
 
     def __init__(self, guidance_dim: int, channels: tuple[int, int, int]) -> None:
@@ -104,7 +108,8 @@ class ChannelNormSoftGate(nn.Module):
             hidden = max(c // 4, 32)
             self.projections.append(
                 nn.Sequential(
-                    nn.Linear(guidance_dim, hidden),
+                    # guidance + 两个模态的池化特征
+                    nn.Linear(guidance_dim + 2 * c, hidden),
                     nn.GELU(),
                     nn.Linear(hidden, 2 * c),
                 )
@@ -112,17 +117,28 @@ class ChannelNormSoftGate(nn.Module):
 
     def forward(
         self, guidance: Tensor, fv_rgb: list[Tensor], fv_ir: list[Tensor]
-    ) -> tuple[list[Tensor], list[Tensor]]:
-        """返回融合后的三层特征，以及每层的 IR 权重（RGB = 1 - IR）。"""
+    ) -> tuple[list[Tensor], list[Tensor], list[Tensor], list[Tensor]]:
+        """返回 ``(融合特征, IR 权重, 重加权 RGB, 重加权 IR)``。
+
+        后两项供式 8 的辅助检测头使用：Fig. 4 里三个 Detection 都接在
+        *Reassigned* 特征上，而不是重加权之前的 ``F_v``。
+        """
         fused: list[Tensor] = []
         weights: list[Tensor] = []
+        weighted_rgb: list[Tensor] = []
+        weighted_ir: list[Tensor] = []
         for proj, xr, xi in zip(self.projections, fv_rgb, fv_ir):
             b, c = xr.shape[:2]
-            logits = proj(guidance).view(b, 2, c, 1, 1)
+            pool_r = xr.mean(dim=(2, 3))
+            pool_i = xi.mean(dim=(2, 3))
+            logits = proj(torch.cat([guidance, pool_r, pool_i], dim=1)).view(b, 2, c, 1, 1)
             w = logits.softmax(dim=1)  # 每个通道在两个模态间归一化
-            fused.append(torch.cat([w[:, 0] * xr, w[:, 1] * xi], dim=1))
+            wr, wi = w[:, 0] * xr, w[:, 1] * xi
+            weighted_rgb.append(wr)
+            weighted_ir.append(wi)
+            fused.append(torch.cat([wr, wi], dim=1))
             weights.append(w[:, 1, :, 0, 0])
-        return fused, weights
+        return fused, weights, weighted_rgb, weighted_ir
 
 
 class PANNeck(nn.Module):

@@ -51,10 +51,10 @@ def test_baseline_forward_shapes(setup) -> None:
     with torch.no_grad():
         out = baseline(torch.rand(2, 6, 128, 128))
     decoded, raw = out["main"]
-    assert decoded.shape == (2, 4 + cfg.data.nc + 1, 3 * (16 * 16 + 8 * 8 + 4 * 4))
-    # anchor 头的 raw 是三个尺度的原始输出（每尺度 3*(5+1+nc) 通道）
-    assert isinstance(raw, list) and len(raw) == 3
-    assert raw[0].shape[1] == 3 * (5 + 1 + cfg.data.nc)
+    # OBB 头 anchor-free：三尺度共 16·16+8·8+4·4 = 336 个预测
+    assert decoded.shape == (2, 4 + cfg.data.nc + 1, 336)
+    # 推理态不保留原始输出，raw 恒为 None
+    assert raw is None
 
 
 def test_baseline_keys_are_pcdf_subset(setup) -> None:
@@ -97,7 +97,52 @@ def test_stage1_freeze_detector(setup) -> None:
             trainable_prefixes.add(name.split(".")[0] + ".")
     assert trainable_prefixes == {"scpl.", "cdf.", "text_adapter."}
     assert pcdf.encoder_rgb.training is False
+    # 检测头是例外：它冻的是参数，模式由 train(mode) 决定（train 态要返回
+    # v8OBBLoss 需要的 dict），因此这里应处于 train 模式。
+    assert pcdf.head.training is True
+    assert all(not p.requires_grad for p in pcdf.head.parameters())
+
+    pcdf.eval()  # 评估时必须切回 eval，否则 NMS 拿到的是 dict
     assert pcdf.head.training is False
+
+
+def test_stage0_all_params_trainable(setup) -> None:
+    """阶段 0 baseline 是全参数训练。
+
+    回归用例：Ultralytics 的 ``.pt`` 把参数存成 ``requires_grad=False``，直接
+    搬层会让两个 encoder（8.6M）静默冻结，只剩 neck+head 在学。
+
+    唯一的例外是 DFL 的积分核 ``head.dfl.conv.weight``（16 个数）：它是固定的
+    期望算子，不是可学参数，ultralytics 在 ``DFL.__init__`` 里就置了
+    ``requires_grad=False``。这里白名单只放它一个，其它任何冻结都算回归。
+    """
+    _, _, baseline = setup
+    frozen = [n for n, p in baseline.named_parameters() if not p.requires_grad]
+    assert frozen == ["head.dfl.conv.weight"], f"意外冻结的参数：{frozen}"
+    for branch in (baseline.encoder_rgb, baseline.encoder_ir, baseline.neck, baseline.head):
+        assert any(p.requires_grad for p in branch.parameters())
+    # 两个 encoder 必须完全可训练（8.6M），否则就是 .pt 权重把梯度关掉了
+    enc = sum(p.numel() for p in baseline.encoder_rgb.parameters())
+    assert enc > 4e6 and all(p.requires_grad for p in baseline.encoder_rgb.parameters())
+
+
+def test_stage2_keeps_encoders_trainable(setup) -> None:
+    """阶段 2 冻结 SCPL 与 text adapter，双流编码器必须仍然可训练。
+
+    用同一个 CLIP 实例新建"刚构建"的网络，避免共用 fixture 已被前面的用例
+    ``freeze_detector()`` 之后的冻结状态干扰判定。
+    """
+    cfg, pcdf, _ = setup
+    table = ConditionTable.load(cfg.paths.condition_index, cfg.model.condition_spec)
+    fresh = PCDFNet(cfg.model, nc=cfg.data.nc, table=table, text_encoder=pcdf.text_encoder)
+    fresh.freeze_scpl()
+    fresh.freeze_text_adapter()
+    for branch in (fresh.encoder_rgb, fresh.encoder_ir, fresh.v_rgb, fresh.v_ir, fresh.s, fresh.cdf):
+        assert any(p.requires_grad for p in branch.parameters())
+    assert all(not p.requires_grad for p in fresh.scpl.parameters())
+    assert all(not p.requires_grad for p in fresh.text_adapter.parameters())
+    trainable = sum(p.numel() for p in fresh.parameters() if p.requires_grad)
+    assert trainable > 15e6, f"阶段 2 可训练参数只有 {trainable/1e6:.2f}M"
 
 
 def test_stage1_text_mode_skips_pcd(setup) -> None:

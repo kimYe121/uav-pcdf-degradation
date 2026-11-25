@@ -49,48 +49,48 @@ git push -u origin main
 
 ---
 
-## 2. 覆盖服务器代码（推荐 rsync）
+## 2. 覆盖服务器代码（tar 打包 + scp + 远端解压）
 
-### 2.1 先看会改什么
+服务器上代码和数据在**同一个目录**（`<REMOTE>/` 下同时有 `src/`、`data/`、
+`weights/`），所以“删了再传”风险不对称：一次 exclude 写漏就删掉 3 GB 数据。
+因此改成“打包 → 上传 → 远端先备份再覆盖”：
 
-```bash
-rsync -avzn --delete \
-  --exclude '.git/' --exclude 'data/' --exclude 'weights/' \
-  --exclude 'runs/' --exclude 'logs/' --exclude 'archive/' \
-  --exclude 'output/' --exclude '.workbuddy/' --exclude '__pycache__/' \
-  <LOCAL>/ user@<HOST>:<REMOTE>/
+```powershell
+# 本地 Windows PowerShell，默认取当前仓库根
+pwsh scripts/deploy.ps1 -DryRun      # 只打包，看会带哪些文件
+pwsh scripts/deploy.ps1              # 打包 + scp + 远端覆盖
+pwsh scripts/deploy.ps1 -NoPrune     # 只覆盖，不清理陈旧文件
 ```
 
-`-n` 是 dry-run，确认"要删除的只有旧代码文件"，不会碰数据/权重/检查点。
+参数：`-SshHost`（形如 `user@your-host`）、`-Port`（SSH 端口）、`-RemoteDir`（远端仓库目录）。
+默认值请在本地脚本里填写，不要写进仓库。
 
-### 2.2 真正同步
+打包排除 `data/ weights/ runs/ logs/ archive/ output/ .git/ .workbuddy/
+__pycache__/`，包体 0.1 MB 量级，秒级传完。
+
+远端由 `scripts/server/sync_code.sh` 完成三件事：
+
+1. 先把现有代码（`src configs scripts tests docs` + 顶层三份文件）打一份
+   `$REMOTE/.backup/code_<时间戳>.tar.gz`，回滚只需 `tar xzf` 覆盖回去；
+2. 解压到临时目录，**只对代码目录**做“新包没有的文件就删”的清理，
+   `data/ weights/ runs/ logs/` 完全不参与；
+3. 覆盖后清掉 `__pycache__`，避免“源码换了、字节码还是旧的”。
+
+没有 PowerShell 的机器等价写法：
 
 ```bash
-rsync -avz --delete \
-  --exclude '.git/' --exclude 'data/' --exclude 'weights/' \
-  --exclude 'runs/' --exclude 'logs/' --exclude 'archive/' \
-  --exclude 'output/' --exclude '.workbuddy/' --exclude '__pycache__/' \
-  <LOCAL>/ user@<HOST>:<REMOTE>/
+tar czf /tmp/pcdf_code.tar.gz --exclude=./data --exclude=./weights \
+  --exclude=./runs --exclude=./logs --exclude=./archive --exclude=./output \
+  --exclude=./.git --exclude=__pycache__ -C <LOCAL> .
+scp -P <PORT> /tmp/pcdf_code.tar.gz user@<HOST>:/tmp/
+scp -P <PORT> <LOCAL>/scripts/server/sync_code.sh user@<HOST>:/tmp/
+ssh -p <PORT> user@<HOST> 'bash /tmp/sync_code.sh /tmp/pcdf_code.tar.gz <REMOTE>'
 ```
-
-`--delete` 会清掉服务器上已被删除的旧文件（例如这次删掉的
-`configs/profiles/yolov5s.yaml`、`weights/yolo11n-obb.pt`），避免"新旧配置
-同时存在"造成的混乱。`--exclude` 的目录**不会被删**。
-
-> 没有 rsync 的机器用 tar 管道（但不会删除服务器上的旧文件，建议先手工删掉
-> `configs/profiles/yolov5s*.yaml`）：
->
-> ```bash
-> tar czf - --exclude=.git --exclude=data --exclude=weights \
->   --exclude=runs --exclude=logs --exclude=archive --exclude=output \
->   . | ssh user@<HOST> 'tar xzf - -C <REMOTE>'
-> ```
 
 ---
-
 ## 3. 权重：彻底重装（推荐，最省心）
 
-服务器上出现"权重混乱"（档位不对、CLIP 缺文件、旧 yolo11 残留）时，直接删掉
+服务器上出现"权重混乱"（档位不对、CLIP 缺文件、旧权重残留）时，直接删掉
 重装，不要手工比对：
 
 ```bash
@@ -154,10 +154,15 @@ bash scripts/server/smoke.sh --bench --batch 8   # 追加 50 step 速度/显存
 ## 5. 训练
 
 ```bash
-# 三阶段一键（推荐放 tmux）
-tmux new -s pcdf
+# 三阶段一键：放进 screen，断线不影响
+screen -dmS pcdf bash -lc 'cd <REMOTE> && bash scripts/server/train_all.sh --profile paper'
+screen -ls                 # 看到 pcdf 在跑
+screen -r pcdf             # 进去看实时输出；Ctrl-a d 退出但不停止
+
+# 也可以先进 screen 再敲命令
+screen -S pcdf
 bash scripts/server/train_all.sh --profile paper
-# Ctrl-b d 断开；tmux attach -t pcdf 回来
+# Ctrl-a d 断开；screen -r pcdf 回来；screen -X -S pcdf quit 结束
 
 # 或单阶段
 bash scripts/server/train.sh baseline
@@ -198,7 +203,7 @@ bash scripts/server/train.sh resume1   # 或直接重跑 stage1，会自动 --re
 
 续训规则（固定不变式）：
 
-- **结构字段**（widths / head_type / backbone / guidance_dim / 类别名）必须与
+- **结构字段**（widths / backbone / guidance_dim / 类别名）必须与
   检查点一致，否则直接报错——不允许"形状对不上还硬跑"；
 - **训练配方**（batch / lr / warmup / grad_accum / amp）以检查点为准，48G 档
   重启不会退回 batch16/lr0.01；

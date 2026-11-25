@@ -1,19 +1,23 @@
-"""双流编码器的 backbone（论文 Fig. 4 的 RGB/IR Encoder）。
+"""双流编码器：YOLOv5s backbone（论文 Fig. 4 的 RGB/IR Encoder）。
 
-论文只写了“dual branch encoders”，没有公开检测器 family。本复现支持两种骨架，
-都作为 implementation choice 记录在 ``docs/ARCHITECTURE.md``：
+论文只写了 "dual branch encoders"，没有公开检测器 family。本仓库选择
+YOLOv5s 作为唯一骨架，依据见 ``docs/ARCHITECTURE.md`` 5.4：
 
-* YOLO11-OBB：``yolo11n-obb.yaml``（128/128/256）、``yolo11s-obb.yaml``
-  （256/256/512），预训练用 ``yolo11*-obb.pt``；
-* YOLOv5：``yolov5.yaml`` + ``scale``（s 档 128/256/256），预训练用
-  ``yolov5su.pt`` 的 backbone 层。论文式 8 含 ``L_obj``、一作 fork 了 v5，
-  因此这是默认家族。
+* 一作公开 fork 了 YOLOv5 v7.0（零改动）；
+* Sec. 5.1 的 momentum / weight decay / lr 正是 Ultralytics v5 配方。
+
+检测头则用 ultralytics 现成的 anchor-free OBB（理由见 :mod:`pcdf.models.heads`），
+式 8 的 ``L_obj`` 只是 v5 anchor 时代的口径，不构成对检测头的约束。
+
+不再提供其它骨架档位：多一个档位就多一份"权重与配置错配"的可能，而论文
+也没有给出可对照的第二选择。
 
 关于规模推断
 ------------
 Ultralytics 只从**文件名**推断 YOLOv5 的 ``n/s/m/l/x``，不同小版本行为不一致
 （8.4.211 与 8.4.216 就不同）。因此这里显式写入 ``scale``，并在有检查点时用
-首层通道数反查真实规模，两者不一致直接报错，而不是"加载成功但全是随机权重"。
+首层通道数反查真实规模：配置写 s、权重是 n 时直接报错，而不是"加载成功但
+全是随机权重"。
 """
 
 from __future__ import annotations
@@ -63,8 +67,7 @@ def infer_v5_scale(weights: str | Path) -> str | None:
     module = _checkpoint_module(weights)
     if module is None:
         return None
-    state = module.state_dict()
-    weight = state.get("model.0.conv.weight")
+    weight = module.state_dict().get("model.0.conv.weight")
     if weight is None:
         return None
     return V5_SCALE_BY_CHANNELS.get(int(weight.shape[0]))
@@ -78,8 +81,8 @@ def _v5_yaml(scale: str) -> dict:
     source = Path(ultralytics.__file__).parent / "cfg" / "models" / "v5" / "yolov5.yaml"
     if not source.is_file():
         raise FileNotFoundError(
-            f"当前 ultralytics 版本缺少 {source}；YOLOv5 骨架不可用。"
-            "请改用 yolo11*-obb.yaml，或安装带 v5 配置的 ultralytics。"
+            f"当前 ultralytics 版本缺少 {source}；YOLOv5 骨架不可用，"
+            "请安装带 v5 配置的 ultralytics（>=8.3）"
         )
     with source.open(encoding="utf-8") as handle:
         config = _yaml.safe_load(handle)
@@ -87,20 +90,18 @@ def _v5_yaml(scale: str) -> dict:
     return config
 
 
-def _build_reference(yaml_name: str, nc: int, scale: str | None) -> nn.Module:
-    """按 yaml 构造一个参考模型，稍后只取它的 backbone 层。"""
-    from ultralytics.nn.tasks import DetectionModel, OBBModel
+def _build_reference(scale: str | None, nc: int) -> nn.Module:
+    """按 Ultralytics 的 v5 yaml 构造参考模型，稍后只取它的 backbone 层。"""
+    from ultralytics.nn.tasks import DetectionModel
 
-    if "yolov5" in yaml_name:
-        chosen = scale or "s"
-        if chosen not in V5_SCALES:
-            raise ValueError(f"未知的 YOLOv5 规模 {chosen!r}，可选 {sorted(V5_SCALES)}")
-        return DetectionModel(_v5_yaml(chosen), nc=nc, verbose=False)
-    return OBBModel(yaml_name, nc=nc, verbose=False)
+    chosen = scale or "s"
+    if chosen not in V5_SCALES:
+        raise ValueError(f"未知的 YOLOv5 规模 {chosen!r}，可选 {sorted(V5_SCALES)}")
+    return DetectionModel(_v5_yaml(chosen), nc=nc, verbose=False)
 
 
 class Backbone(nn.Module):
-    """YOLO backbone，输出 P3/8、P4/16、P5/32 三层特征。
+    """YOLOv5 backbone，输出 P3/8、P4/16、P5/32 三层特征。
 
     优先从 ``.pt`` 里直接取它自己的层与权重（层与权重天生一致）；没有可用
     检查点时按 yaml 构造并随机初始化，再可选地加载 backbone 权重。
@@ -110,26 +111,37 @@ class Backbone(nn.Module):
         self,
         weights: str | Path | None = None,
         nc: int = 11,
-        yaml: str = "yolo11n-obb.yaml",
+        yaml: str = "yolov5.yaml",
         scale: str | None = None,
         verbose: bool = True,
     ) -> None:
         super().__init__()
+        if "yolov5" not in yaml:
+            raise ValueError(
+                f"只支持 YOLOv5 骨架，收到 yaml={yaml!r}；本项目不提供其它骨架档位"
+            )
+
         reference = _checkpoint_module(weights)
         source = "checkpoint"
         if reference is not None:
             # 官方 .pt 的权重常是 FP16，训练前统一转回 FP32。
             reference = reference.float()
-            if "yolov5" in yaml:
-                self._verify_v5_scale(Path(weights), scale)
+            self._verify_v5_scale(Path(weights), scale)
         else:
-            reference = _build_reference(yaml, nc, scale)
+            reference = _build_reference(scale, nc)
             source = "yaml"
 
-        taps = tuple(int(i) for i in reference.save[:3])  # 11 系与 v5 均为 (4, 6, 10)
+        taps = tuple(int(i) for i in reference.save[:3])  # v5 为 (4, 6, 10)
         self.layers = nn.ModuleList([reference.model[i] for i in range(max(taps) + 1)])
         self.taps = taps
         del reference
+
+        # Ultralytics 发布的 .pt 里参数是 requires_grad=False（推理态保存），
+        # 直接搬层过来会让双流编码器在整段训练中被静默冻结：stage 0 只剩
+        # neck/head 在学（2.27M/11.71M），stage 2 也一样。冻结必须只由各阶段
+        # 的 freeze_* 显式决定，所以这里统一打开。
+        for param in self.parameters():
+            param.requires_grad_(True)
 
         self.out_channels = self._infer_channels()
         self._source = source
@@ -137,7 +149,7 @@ class Backbone(nn.Module):
             self.load_pretrained(weights)
         if verbose:
             print(
-                f"[backbone] src={source} yaml={yaml} scale={scale} out={self.out_channels} "
+                f"[backbone] src={source} yaml=yolov5 scale={scale} out={self.out_channels} "
                 f"weights={Path(weights).resolve() if weights else '随机初始化'}",
                 flush=True,
             )

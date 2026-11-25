@@ -58,8 +58,9 @@ from .config import Config, save_config
 from .constants import EPOCH_FIELDS, STAGE_NAMES
 from .data import batch_to_device, build_dataset, build_loader, epoch_loader
 from .evaluate import evaluate_obb
-from .losses import decoupling_terms, make_criterion
+from .losses import decoupling_terms
 from .models.baseline import BaselineNet, load_baseline_into_pcdf
+from .models.heads import make_criterion
 from .models.pcdf import PCDFNet
 from .paths import display_path, resolve, stage_dir
 from .runtime import (
@@ -338,6 +339,7 @@ class Trainer:
                     f"  ep{epoch + 1} {step + 1}/{limit} "
                     f"loss={running['loss'] / steps:.3f} "
                     f"box={running['box'] / steps:.3f} cls={running['cls'] / steps:.3f} "
+                    f"dfl={running['dfl'] / steps:.3f} angle={running['angle'] / steps:.3f} "
                     f"lr={self.optimizer.param_groups[0]['lr']:.5f} eta={eta_min:.1f}min",
                     flush=True,
                 )
@@ -389,13 +391,17 @@ class Trainer:
                 group["lr"] = lr
 
         with torch.autocast("cuda", enabled=self.scaler.is_enabled(), dtype=torch.float16):
-            out = model(
-                images,
+            # Fig. 10：阶段 1 用文本引导 + 原始特征；阶段 2 训练仍由 SCPL 文本
+            # 引导 CDF，但权重作用在 F_v 上（测试阶段才切换到 GAP(F_s)）。
+            fwd = dict(
                 cond=cond,
-                guidance="text" if self.stage == 1 else "visual",
+                guidance="text" if self.stage in (1, 2) else "visual",
                 return_aux=(self.stage == 2),
                 return_ft=(self.stage == 2),
             )
+            if self.stage == 2:
+                fwd["fuse"] = "decoupled"
+            out = model(images, **fwd)
             loss_main, items = self.criterion(out["main"], batch)
             loss_main = loss_main.sum()
             loss = loss_main
@@ -440,7 +446,6 @@ class Trainer:
             "cls": float(items.get("cls_loss", 0.0)),
             "dfl": float(items.get("dfl_loss", 0.0)),
             "angle": float(items.get("angle_loss", 0.0)),
-            "obj": float(items.get("obj_loss", 0.0)),
             "l_dt": float(terms["l_dt"].detach()) if terms else 0.0,
             "l_irr": float(terms["l_irr"].detach()) if terms else 0.0,
             "l_dc": float(terms["l_dc"].detach()) / batch_size_now if terms else 0.0,
@@ -491,6 +496,11 @@ class Trainer:
             max_batches=self.val_batches,
             thresholds=(0.5,),
             names=self.cfg.data.names,
+            # 监控走与训练一致的引导：阶段 1/2 训练都用 SCPL 文本引导，
+            # 视觉引导在阶段 2 初期是未训练的 GAP(F_s)，用它选点会重演
+            # 2026-11-24 的 best.pt 误选事故（见 STATE §9）。部署口径的
+            # 视觉 test 在训练结束后单独评。
+            guidance="text" if self.stage in (1, 2) else "visual",
         )
         metrics["map50"] = result["map50"]
         metrics["eval_images"] = result["n_images"]
@@ -556,7 +566,8 @@ class Trainer:
         )
         print(
             f"[epoch {epoch + 1}/{self.total_epochs}] loss={metrics['loss']:.3f} "
-            f"box={metrics['box']:.3f} cls={metrics['cls']:.3f} "
+            f"box={metrics['box']:.3f} cls={metrics['cls']:.3f} dfl={metrics['dfl']:.3f} "
+            f"angle={metrics['angle']:.3f} "
             f"l_dt={metrics['l_dt']:.4f} l_irr={metrics['l_irr']:.4f} "
             f"kept={metrics['kept']:.2f} lr={metrics['lr']:.5f} "
             f"time={metrics['epoch_time_s']:.0f}s",
@@ -742,7 +753,9 @@ def train_stage(
         model.freeze_scpl()
         model.freeze_text_adapter()
     elif stage == 1:
-        model.freeze_detector()
+        model.freeze_detector(
+            keep_detector_trainable=cfg.train.stage1_train_detector
+        )
 
     params = [p for p in model.parameters() if p.requires_grad]
     # 论文 Sec. 5.1 只声明 SGD + momentum + weight decay，未提 Nesterov，
@@ -756,7 +769,7 @@ def train_stage(
     )
     gamma = cfg.train.final_lr_ratio ** (1.0 / max(total_epochs - 1, 1))
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
-    criterion = make_criterion(model.head, cfg.model)
+    criterion = make_criterion(model)
     scaler = torch.amp.GradScaler("cuda", enabled=cfg.train.amp and device_obj.type == "cuda")
 
     # ---- 恢复优化器/调度器/AMP 与随机数 ---------------------------------

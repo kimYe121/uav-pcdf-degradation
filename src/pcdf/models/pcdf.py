@@ -7,7 +7,7 @@ Sec. 4.1 / Fig. 4 : RGB/IR 双流编码器、三支解耦、软门控
 式 5              : ``S`` / ``V_rgb`` / ``V_ir``（:class:`DecoupleBranch`）
 式 6-9            : :mod:`pcdf.losses`
 式 10-11          : :class:`pcdf.models.blocks.ChannelNormSoftGate`
-检测头            : 由 ``model.head_type`` 选择（见 :mod:`pcdf.models.heads`）
+检测头            : ultralytics OBB（anchor-free + DFL，式 8，见 :mod:`pcdf.models.heads`）
 
 三阶段协议（正文 Sec. 5.2 + 补充材料 B.3）
 --------------------------
@@ -38,8 +38,8 @@ from ..config import ModelConfig
 from ..text_encoder import CLIPTextEncoder
 from .blocks import ChannelNormSoftGate, DecoupleBranch, GuidanceAdapter, PANNeck
 from .encoder import Backbone
-from .anchor_head import AnchorOBBHead
-from .heads import build_head, initialise
+
+from .heads import attach_loss_context, build_head, initialise
 from .scpl import SCPL
 
 
@@ -102,10 +102,13 @@ class PCDFNet(nn.Module):
         self.text_adapter = GuidanceAdapter(text_encoder.hidden_size, cfg.guidance_dim)
 
         self.cdf = ChannelNormSoftGate(cfg.guidance_dim, self.widths)
-        self.neck = PANNeck(self.widths)
+        # Fig. 4 的字面接线是 concat 直连检测头（图例：F = Channel Concatenation）；
+        # v5 系检测器需要颈部，两档都保留，由 model.neck 决定。
+        self.neck = PANNeck(self.widths) if cfg.neck == "pan" else None
         # 共享 OBB head：主融合特征与两个 F_v 辅助分支都使用同一组参数。
         self.head = build_head(cfg, self.nc)
-        initialise(self, self.head)
+        initialise(self)
+        attach_loss_context(self)
         if cfg.freeze_text:
             self.freeze_text()
 
@@ -139,32 +142,41 @@ class PCDFNet(nn.Module):
         for param in self.text_adapter.parameters():
             param.requires_grad_(False)
 
-    def freeze_detector(self) -> None:
-        """阶段 1 冻结 baseline 主干（补充材料 B.3：只训练 SCPL 与 CDF）。
+    def freeze_detector(self, *, keep_detector_trainable: bool = False) -> None:
+        """阶段 1 的冻结范围（补充材料 B.3）。
 
-        冻结双流 encoder、neck、head 与三支解耦分支。阶段 1 的前向不经过
-        PCD（Fig. 10 Stage I 中 CDF 权重直接作用于 encoder 原始特征），
-        V/S 分支一并冻结，避免优化器收到全零梯度组。
+        默认冻结双流 encoder、neck、head 与三支解耦分支——对应论文
+        "training only the SCPL and CDF modules"。``keep_detector_trainable=True``
+        时只冻结三支解耦（阶段 1 不使用 PCD，避免 weight decay 污染随机初始化），
+        encoder/neck/head 参与训练——对应"论文只显式冻结了 CLIP 文本编码器"
+        这一读法。
         """
-        modules = (
-            self.encoder_rgb, self.encoder_ir, self.neck, self.head,
-            self.v_rgb, self.v_ir, self.s,
-        )
+        modules = [self.v_rgb, self.v_ir, self.s]
+        if not keep_detector_trainable:
+            modules += [self.encoder_rgb, self.encoder_ir, self.neck, self.head]
         for module in modules:
             for param in module.parameters():
                 param.requires_grad_(False)
             module.eval()
         self._frozen_modules = list(modules)
+        # 头被冻的是参数，不是模式：eval 下的 OBB 只返回解码结果，没有 loss
+        # 需要的 dict，阶段 1 就再也算不出检测损失了。
+        self.head.train(True)
 
     def train(self, mode: bool = True) -> "PCDFNet":
         """保持被冻结模块始终处于 eval 模式。
 
         训练循环每次 epoch 都会调用 ``model.train()``，若不覆写，冻结的
         encoder 里的 BatchNorm 会继续更新 running stats，等效于泄训。
+
+        检测头是例外：它的模式不是"学不学"，而是"返回什么"——train 返回
+        ``v8OBBLoss`` 需要的 dict，eval 返回可直接进 NMS 的张量。因此头的
+        模式始终跟随本次调用的 ``mode``，即使参数已被冻结（阶段 1）。
         """
         super().train(mode)
         for module in self._frozen_modules:
             module.eval()
+        self.head.train(mode)
         return self
 
     def trainable_parameters(self) -> list[nn.Parameter]:
@@ -198,13 +210,19 @@ class PCDFNet(nn.Module):
         return_aux: bool = False,
         return_ft: bool = False,
         force_all_gates: bool = False,
+        fuse: str | None = None,
     ) -> dict[str, object]:
         """单次前向。
 
         Args:
             x: ``(B, 6, H, W)``，通道 0-2 为 BGR，3-5 为 IR。
             cond: ``(B, N)`` 条件 id；使用 SCPL 时必填。
-            guidance: ``"text"``（阶段 1）或 ``"visual"``（阶段 2/测试）。
+            guidance: 引导来源：``"text"``（SCPL 文本嵌入）或 ``"visual"``
+                （``GAP(F_s)``，测试部署路径）。
+            fuse: CDF 的融合对象：``"raw"``（encoder 原始特征，阶段 1）或
+                ``"decoupled"``（``F_v``，阶段 2/测试）。默认沿用旧行为
+                （text→raw、visual→decoupled），显式传入则解耦"引导来源"
+                与"融合对象"——阶段 2 训练按 Fig. 10 用文本引导 + ``F_v``。
             return_aux: 是否额外用共享 head 处理两个 ``F_v``，供 ``L_dc``。
             return_ft: 是否计算并返回 ``F_t``，供阶段 2 的 ``L_dt``。
             force_all_gates: 门控全部打开（诊断用，绕过 ``tau``）。
@@ -224,8 +242,14 @@ class PCDFNet(nn.Module):
         feats_rgb = self.encoder_rgb(rgb)
         feats_ir = self.encoder_ir(ir)
 
+        # 融合对象：默认 text→raw（阶段 1）、visual→decoupled（阶段 2/测试）。
+        if fuse is None:
+            fuse = "raw" if guidance == "text" else "decoupled"
+        if fuse not in ("raw", "decoupled"):
+            raise ValueError(f"未知融合对象 {fuse!r}")
+
         # 阶段 1 的前向不需要 PCD（Fig. 10 Stage I），按需计算避免无谓开销。
-        need_pcd = guidance == "visual" or return_aux or return_ft
+        need_pcd = fuse == "decoupled" or guidance == "visual" or return_aux or return_ft
         fv_rgb = fv_ir = fs = None
         if need_pcd:
             # 三支解耦（式 5）。
@@ -259,27 +283,26 @@ class PCDFNet(nn.Module):
         # CDF（式 10-11）与检测。论文 Fig. 10：阶段 1（文本引导）还没有 PCD，
         # CDF 权重直接作用于 encoder 原始特征；阶段 2/测试作用于条件不变
         # 分支 F_v（式 11 明确"仅对条件不变特征进行权重重分配"）。
-        if guidance == "text":
+        if fuse == "raw":
             fuse_rgb, fuse_ir = feats_rgb, feats_ir
         else:
             assert fv_rgb is not None and fv_ir is not None
             fuse_rgb, fuse_ir = fv_rgb, fv_ir
-        fused, weights = self.cdf(guide, fuse_rgb, fuse_ir)
-        head_out = self.head(self.neck(fused))
-        # anchor 头需要显式解码才能交给 NMS；v8 头返回 ultralytics 的预测字典。
-        main: object = (
-            (self.head.decode(head_out), head_out)
-            if isinstance(self.head, AnchorOBBHead)
-            else head_out
-        )
+        fused, weights, weighted_rgb, weighted_ir = self.cdf(guide, fuse_rgb, fuse_ir)
+        features = self.neck(fused) if self.neck is not None else fused
+        head_out = self.head(features)
+        if isinstance(head_out, dict):          # 训练态：v8OBBLoss 要的 dict
+            main: object = head_out
+        else:                                   # 推理态：(decoded, preds)
+            main = (head_out[0], None)
 
         aux_rgb = aux_ir = None
         if return_aux:
-            # 式 8：同一个检测器分别作用于两个条件不变分支，
-            # 共享 head 不增加参数，也保证“判别能力”的定义一致。
-            assert fv_rgb is not None and fv_ir is not None
-            aux_rgb = self.head(fv_rgb)
-            aux_ir = self.head(fv_ir)
+            # 式 8 + Fig. 4：三个 Detection 都接在 **Reassigned** 特征上
+            # （W_m ⊙ F_v,m），不是重加权之前的 F_v。这样辅助头的判别能力
+            # 与主融合头看到的是同一批特征。
+            aux_rgb = self.head(weighted_rgb)
+            aux_ir = self.head(weighted_ir)
 
         out: dict[str, object] = {
             "main": main,

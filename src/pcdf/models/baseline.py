@@ -7,7 +7,7 @@ two modalities through concatenation fusion."
 
 - 双流 backbone（``encoder_rgb`` / ``encoder_ir``，键名一致）；
 - :class:`PANNeck` 的 ``reduce``（1×1，2C→C）就是"拼接融合"的可学习部分；
-- 同一个检测头（由 ``model.head_type`` 决定）。
+- 同一个 OBB 检测头（anchor-free + DFL，式 8 的 ``L_cls + L_reg``）。
 
 因此 baseline 的 ``state_dict`` 是 PCDFNet 的子集，可直接作为论文三阶段训练
 协议的起点：补充材料 B.3 规定阶段 1 只训练 SCPL 与 CDF，主干必须从预训练的
@@ -26,8 +26,7 @@ from torch import Tensor
 from ..config import ModelConfig
 from .blocks import PANNeck
 from .encoder import Backbone
-from .heads import build_head, initialise
-from .anchor_head import AnchorOBBHead
+from .heads import attach_loss_context, build_head, initialise
 
 
 class BaselineNet(nn.Module):
@@ -51,10 +50,12 @@ class BaselineNet(nn.Module):
                 f"{self.encoder_rgb.out_channels} 不一致；请检查 profile"
             )
 
-        # PANNeck 的 reduce（1×1，2C→C）承担 concat 融合。
-        self.neck = PANNeck(self.widths)
+        # neck=pan：PANNeck 的 reduce（1×1，2C→C）承担 concat 融合；
+        # neck=concat：严格照 Fig. 4，拼接后直连检测头。
+        self.neck = PANNeck(self.widths) if cfg.neck == "pan" else None
         self.head = build_head(cfg, self.nc)
-        initialise(self, self.head)
+        initialise(self)
+        attach_loss_context(self)
 
     @property
     def stride(self) -> Tensor:
@@ -81,11 +82,13 @@ class BaselineNet(nn.Module):
         feats_rgb = self.encoder_rgb(x[:, :3])
         feats_ir = self.encoder_ir(x[:, 3:])
         fused = [torch.cat([r, i], dim=1) for r, i in zip(feats_rgb, feats_ir)]
-        head_out = self.head(self.neck(fused))
-        if isinstance(self.head, AnchorOBBHead):
-            # 统一成 (decoded, raw)：评估取 [0]，损失取 [1]。
-            return {"main": (self.head.decode(head_out), head_out)}
-        return {"main": head_out}
+        features = self.neck(fused) if self.neck is not None else fused
+        head_out = self.head(features)
+        if isinstance(head_out, dict):        # 训练态：v8OBBLoss 要的 dict
+            main: object = head_out
+        else:                                 # 推理态：(decoded, preds)
+            main = (head_out[0], None)
+        return {"main": main}
 
 
 def load_baseline_into_pcdf(

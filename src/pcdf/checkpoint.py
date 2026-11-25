@@ -10,8 +10,8 @@
 
     **结构字段必须一致；训练配方以检查点为准；本次命令行显式给出的值优先。**
 
-- *结构字段*（``widths`` / ``head_type`` / ``backbone_*`` / ``guidance_dim`` /
-  ``data.names``）决定权重形状，不一致无法加载，直接报错；
+- *结构字段*（``widths`` / ``backbone_*`` / ``guidance_dim`` / ``data.names``）
+  决定权重形状，不一致无法加载，直接报错；
 - *训练配方*（``batch`` / ``lr`` / ``warmup`` / ``grad_accum`` / ``amp``）
   决定优化轨迹，续训必须沿用检查点里的值，否则"续训"其实是换了个实验；
 - *命令行李参数*（``--batch`` / ``--epochs``）显式覆盖时以用户为准，并在
@@ -43,11 +43,13 @@ CHECKPOINT_FORMAT = 2
 # 决定权重形状的字段：续训时必须与检查点完全一致。
 STRUCTURAL_KEYS: tuple[tuple[str, str], ...] = (
     ("model", "widths"),
-    ("model", "head_type"),
     ("model", "backbone_yaml"),
     ("model", "backbone_scale"),
     ("model", "guidance_dim"),
     ("data", "names"),
+    # 输入几何决定特征的感受野与尺度统计；跨几何续训等价于换了数据分布，
+    # 优化器/BN 统计量都不可沿用。老检查点必须用老 imgsz 续训。
+    ("data", "imgsz"),
 )
 
 # 决定优化轨迹的字段：续训沿用检查点，除非命令行显式覆盖。
@@ -351,13 +353,6 @@ def plan_resume(
 
     if state.start_epoch >= total_epochs:
         notes.append(f"检查点已完成 {state.start_epoch}/{total_epochs} 轮，无需继续")
-
-    saved_imgsz = saved_data.get("imgsz")
-    if saved_imgsz and _comparable(saved_imgsz) != _comparable(cfg.data.imgsz):
-        warnings.append(
-            f"检查点 imgsz={tuple(saved_imgsz)} 与当前 {cfg.data.imgsz} 不同；"
-            "继续训练会改变输入尺度，通常不应这样做"
-        )
 
     profile = saved_train.get("profile")
     if profile:

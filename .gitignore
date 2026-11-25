@@ -35,3 +35,16 @@ output/
 # os
 Thumbs.db
 .DS_Store
+
+# experiment outputs and private notes (not part of the public repo)
+figures/
+!docs/assets/figures/
+!docs/assets/figures/**
+dist/
+*.tar.gz
+results/
+!docs/results/
+!docs/results/**
+docs/STATE.md
+docs/UPLOAD.md
+scripts/_archive/

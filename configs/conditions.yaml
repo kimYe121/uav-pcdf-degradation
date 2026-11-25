@@ -1,38 +1,56 @@
-# Condition taxonomy used by SCPL (paper Eq. 1 and Supplementary Sec. B.1).
+# Condition taxonomy used by SCPL (paper Eq. 1 and Supplementary Sec. B.1/B.2).
 #
-# The six attributes are ordered exactly as they appear in the prompt template:
+# 提示模板逐字取自补充材料 B.1：
 #   "An aerial image, over {scenario}, at a altitude of {altitude},
-#    at an angle of {angle}, at {time}, in {weather}, in {illumination}."
+#    at an angle of {angle}, at {Time}, in {Weather}, in {Illumination}."
 #
-# FIDELITY NOTE
-# -------------
-# ATR-UMOD releases weather / illumination / scenario as anonymous integer
-# codes.  The paper's official code->name table and its B.2 merging rules for
-# weather (After Rain + Rainy -> Cloudy) and illumination (Overexposure ->
-# Normal, Twilight -> Dim) are not public.  The defaults below therefore keep
-# each code as its own class with a neutral name.  Replace the names/codes when
-# the official mapping is available; no semantic label is invented here.
+# 码本来源（官方，非推断）
+# ------------------------
+# 数据集仓库 supercpy/ATR-UMOD 的 `attribute_details.txt` 给出了每个属性的
+# 整数码含义。本文件按它填写 codes/names，并按补充材料 B.2 的合并规则填 groups。
+#
+#   weather_dict   : 0 Sunny / 1 Cloudy / 2 Rainy / 3 After Rain / 4 Foggy /
+#                    5 Snowy / 6 Sunny_Night / 7 Cloudy_Night /
+#                    8 Sunny_Near_Night / 9 Cloudy_Near_Night
+#   illumination_dict: 0 Overexposure(uniform bright) / 1 Normal(uniform normal) /
+#                    2 Pre-Twilight(non-uniform dim) / 3 Post-Twilight(non-uniform dim) /
+#                    4 Dim(uniform dim) / 5 Near Night(uniform dark) /
+#                    6 Night(non-uniform, no illumination)
+#   location_dict  : 0 Road@Urban villages / 1 Neighborhood@Urban villages /
+#                    2 Construction site@Urban Suburb / 3 Road@Urban Suburb /
+#                    4 School@Urban Suburb / 5 Factory@Urban Suburb /
+#                    6 Parking Lot@Urban Suburb / 7 Neighborhood@Urban Suburb /
+#                    8 Road@Urban Center / 9 Construction site@Urban villages /
+#                    10 Parking Lot@Urban villages
+#
+# 图像统计交叉验证（150 张/码）：code 6 采集小时中位 20 点、93% 夜间；
+# code 4 边缘梯度 46（全表最低）；code 2 饱和度 36（全表最低）；与上表一致。
+#
+# B.2 合并规则（已落到 groups）
+#   weather : "Rainy" + "After Rain" -> "Cloudy"；四个夜间/近夜码 -> "Night"
+#   illumination: "Overexposure" -> "Normal"；"Pre/Post-Twilight" -> "Dim"
 
 subject: "An aerial image"
 
 attributes:
+  # 11 个场景类型，前缀 "over"，不再合并（论文 Fig. 1 明确写 11 scenarios）。
   - key: scenario
     source: location
     prefix: "over"
     kind: identity
     codes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     names:
-      - "scenario 0"
-      - "scenario 1"
-      - "scenario 2"
-      - "scenario 3"
-      - "scenario 4"
-      - "scenario 5"
-      - "scenario 6"
-      - "scenario 7"
-      - "scenario 8"
-      - "scenario 9"
-      - "scenario 10"
+      - "road in the urban villages"
+      - "neighborhood in the urban villages"
+      - "construction site in the urban suburb"
+      - "road in the urban suburb"
+      - "school in the urban suburb"
+      - "factory in the urban suburb"
+      - "parking lot in the urban suburb"
+      - "neighborhood in the urban suburb"
+      - "road in the urban center"
+      - "construction site in the urban villages"
+      - "parking lot in the urban villages"
 
   # Supplementary B.2: altitude <= 120 m is low, > 120 m is high.
   - key: altitude
@@ -63,41 +81,24 @@ attributes:
       - {start: 14, end: 19, name: "afternoon"}
       - {start: 19, end: 7, name: "night"}
 
-  # Paper Table 1 lists Sunny / Cloudy / Foggy / Snowy / Night after merging.
-  # Raw codes are kept anonymous until the official codebook is available.
-  # When the codebook is known, express B.2 with codes/groups/names, e.g.
-  #   codes:  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  #   groups: [0, 0, 0, 0, 1, 1, 2, 3, 3, 4]   # Rainy/After Rain -> Cloudy
-  #   names:  [sunny, cloudy, foggy, snowy, night]
+  # 10 个原始天气码 -> 5 类（B.2：Rainy + After Rain 并入 Cloudy；夜间/近夜并入 Night）
   - key: weather
     source: weather
     prefix: "in"
     kind: identity
     codes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    names:
-      - "weather type 0"
-      - "weather type 1"
-      - "weather type 2"
-      - "weather type 3"
-      - "weather type 4"
-      - "weather type 5"
-      - "weather type 6"
-      - "weather type 7"
-      - "weather type 8"
-      - "weather type 9"
+    groups: [0, 1, 1, 1, 2, 3, 4, 4, 4, 4]
+    names: ["sunny", "cloudy", "foggy", "snowy", "night"]
 
-  # Paper Table 1 lists Normal / Dim / Near Night / Night after merging.
-  # The same codes/groups/names form can encode B.2 once the codebook is known.
+  # 7 个原始光照码 -> 4 类（B.2：Overexposure 并入 Normal；Pre/Post-Twilight 并入 Dim）
   - key: illumination
     source: illumination
     prefix: "in"
     kind: identity
     codes: [0, 1, 2, 3, 4, 5, 6]
+    groups: [0, 0, 1, 1, 1, 2, 3]
     names:
-      - "illumination level 0"
-      - "illumination level 1"
-      - "illumination level 2"
-      - "illumination level 3"
-      - "illumination level 4"
-      - "illumination level 5"
-      - "illumination level 6"
+      - "normal illumination"
+      - "dim illumination"
+      - "near night illumination"
+      - "night illumination"

@@ -63,21 +63,64 @@ def test_time_bins() -> None:
 
 
 def test_prompt_template(table: ConditionTable) -> None:
+    """提示必须用官方码本的自然语言，而不是匿名占位。"""
     ids = [0, 1, 0, 0, 0, 0]
     prompt = table.prompt_from_ids(ids)
-    assert prompt.startswith("An aerial image, over scenario 0,")
+    assert prompt.startswith("An aerial image, over road in the urban villages,")
     assert prompt.endswith(".")
     assert "at a altitude of high altitude" in prompt
     assert "at an angle of low angle" in prompt
     assert "at morning" in prompt
-    assert "in weather type 0" in prompt
-    assert "in illumination level 0" in prompt
+    assert "in sunny" in prompt
+    assert "in normal illumination" in prompt
+
+
+def test_official_codebook_and_b2_merges(table: ConditionTable) -> None:
+    """码本 = supercpy/ATR-UMOD 的 attribute_details.txt + 补充材料 B.2 合并。
+
+    weather: 0 Sunny/1 Cloudy/2 Rainy/3 After Rain/4 Foggy/5 Snowy/
+             6 Sunny_Night/7 Cloudy_Night/8 Sunny_Near_Night/9 Cloudy_Near_Night
+             -> 5 类（Rainy+After Rain 并入 Cloudy，四个夜间码并入 Night）
+    illumination: 0 Overexposure/1 Normal/2 Pre-Twilight/3 Post-Twilight/
+             4 Dim/5 Near Night/6 Night -> 4 类
+    """
+    counts = dict(zip(table.keys, table.class_counts))
+    assert counts["weather"] == 5
+    assert counts["illumination"] == 4
+    assert counts["scenario"] == 11
+    assert counts["altitude"] == 2 and counts["angle"] == 2 and counts["time"] == 3
+
+    weather = table.specs[table.keys.index("weather")]
+    assert weather.resolve("0") != weather.resolve("1")           # sunny vs cloudy
+    assert weather.resolve("2") == weather.resolve("1")           # rainy -> cloudy
+    assert weather.resolve("3") == weather.resolve("1")           # after rain -> cloudy
+    assert weather.resolve("6") == weather.resolve("9")           # night 变体合并
+    illum = table.specs[table.keys.index("illumination")]
+    assert illum.resolve("0") == illum.resolve("1")               # overexposure -> normal
+    assert illum.resolve("2") == illum.resolve("4")               # twilight -> dim
+    assert illum.resolve("6") != illum.resolve("5")               # night != near night
+
+    # 统计必须覆盖 CSV 全部行（按 stem 折叠会少掉整个 test 划分的 1503 行）
+    for key, dist in table.class_distribution().items():
+        assert sum(dist.values()) == len(table.all_ids), key
+
+
+def test_stem_is_only_unique_within_subset(table: ConditionTable) -> None:
+    """ATR-UMOD 里同一 stem 可同时出现在 val 与 test（条件完全不同）。
+
+    只用 stem 索引会让后读到的行覆盖先读到的，测试集条件被静默替换。
+    """
+    dup = [s for s in table.ids_by_stem if ("val", s) in table.ids_by_split_stem
+           and ("test", s) in table.ids_by_split_stem]
+    assert dup, "索引里应存在同时属于 val 与 test 的 stem"
+    stem = dup[0]
+    assert not np.array_equal(table.ids_for(stem, "val"), table.ids_for(stem, "test"))
 
 
 def test_mask_drops_blocks(table: ConditionTable) -> None:
     ids = [0, 1, 0, 0, 0, 0]
     prompt = table.prompt_from_ids(ids, [True, False, True, False, True, False])
-    assert "scenario 0" in prompt
+    assert "road in the urban villages" in prompt
     assert "altitude" not in prompt
     assert "angle" in prompt
     assert "morning" not in prompt

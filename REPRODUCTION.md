@@ -11,7 +11,7 @@
 训练、评估和小样本过拟合验证。
 
 **不是**：官方代码复现。论文没有公开检测器 backbone/neck/OBB head、`S/V` 内部
-结构、阶段 1 引导来源、天气/光照/场景码本等细节。本仓库不承诺 63.1 mAP50，
+结构、阶段 1 引导来源等细节（条件码本已由数据集仓库公开）。本仓库不承诺 63.1 mAP50，
 也不把不同 backbone、batch 或数据子集的结果与论文表格直接横比。
 
 ## 2. 已实现清单
@@ -62,6 +62,8 @@ implementation choice。
 ## 4. 数据协议
 
 - 训练/验证/测试：`data/atr_umod/{train 10054, val 1796, test 1503}`。
+  **报告口径 = `--split test`**（论文同口径）；`val` 只用于选权重，其 mAP 比 test
+  低约 16 点（跨场景整组留出 + 长尾类别几乎无样本），不可与论文数字并列比较。
 - 输入：RGB 与 IR 配对；IR 灰度复制 3 通道后拼成 6 通道。
 - 标签：`labels_ir` 的 YOLO-OBB 8 坐标，归一化。
 - 条件：`condition_index.csv` 的 `UAVheight/UAVangle/time/weather/illumination/location`。
@@ -76,7 +78,7 @@ implementation choice。
 
 ```bash
 python -m pytest -q
-# 83 passed
+# 86 passed
 
 python -m pcdf.cli.check_env
 # 兼容性 + 权重 + 数据 + 提示 全部通过
@@ -101,7 +103,7 @@ GPU 实测（RTX 4060 Laptop 8 GB，AMP）：
   第 1 个 batch，`global_step` 从 1 继续累加；
 - 从 `checkpoints/epoch_0001.pt` 直接恢复时，运行目录自动识别为上一级；
 - `--epochs` 延长总轮数后，调度器保留 `last_epoch` 并按新总轮数重算 gamma；
-- 结构字段不一致（如用 `yolo11s` 档续训 v5s 检查点）会直接报错，不会"形状
+- 结构字段不一致（如用改过 `widths` 的配置续训）会直接报错，不会"形状
   对不上还硬跑"。
 
 `SIGTERM` 拦截面向 Linux 容器；Windows 下 `os.kill(SIGTERM)` 会直接终止进程，
@@ -117,8 +119,8 @@ GPU 实测（RTX 4060 Laptop 8 GB，AMP）：
 | `test_runtime.py` | 无卡时 `auto→cpu`、显式 CUDA 快速失败、CPU 环境快照不崩、原子写 |
 | `test_data.py` | 6 通道、条件 id、归一化 OBB、collate |
 | `test_model.py` | 训练/评估前向形状、CDF 权重范围、门控梯度、文本冻结、阶段 2 冻结 |
-| `test_baseline.py` | 键集对齐、阶段 1 冻结策略、文本模式跳过 PCD |
-| `test_anchor_head.py` | 解码通道布局、objectness 先验、损失有限可导、增益来自配置 |
+| `test_baseline.py` | 键集对齐、stage 0 全参数可训练、stage 2 编码器不误冻结、阶段 1 冻结策略、文本模式跳过 PCD |
+| `test_obb_head.py` | 训练态返回 loss 用的 dict、推理态返回可进 NMS 的张量、损失可反传、`model.model[-1]` / `args` 上下文 |
 | `test_losses.py` | CMD 相同为 0/平移为正、`L_irr` 零特征为 0、`L_dec` 组合正确 |
 | `test_evaluate.py` | 完美预测 AP=1、漏检为 0、无 GT 类别为 NaN |
 | `test_report.py` | 状态读取、完成判定、`--require-stage` 退出码 |
@@ -132,9 +134,9 @@ RTX 4060 Laptop 8 GB；同一套测试在 `CUDA_VISIBLE_DEVICES=""` 下也全部
 
 | 项目 | 论文 | 本仓库 |
 |---|---|---|
-| 检测器 | 未公开 | YOLOv5s backbone + PAN + anchor OBB head（含 objectness） |
+| 检测器 | 未公开 | YOLOv5s backbone + PAN + ultralytics OBB head（anchor-free + DFL） |
 | 融合尺度 | 未公开 | P3/P4/P5 |
-| 天气/光照/场景 | B.2 合并后的语义类 | 匿名整数类，可替换码本 |
+| 天气/光照/场景 | B.2 合并后的语义类 | 官方码本 + B.2 合并，提示句为自然语言 |
 | 训练 batch | 16 | 配置 16；8 GB 用 2–4 覆盖 |
 | 文本编码器 | CLIP ViT-B/16 冻结 | 相同，额外应用官方 `text_projection` |
 | 增强 | 未公开 | 仿射 + 水平翻转，无 mosaic/HSV |
@@ -157,7 +159,7 @@ RTX 4060 Laptop 8 GB；同一套测试在 `CUDA_VISIBLE_DEVICES=""` 下也全部
 
 ## 8. 下一步
 
-- 接入官方条件码本后重跑 SCPL（当前匿名天气/光照会削弱文本语义）。
+- 条件码本已接入官方 attribute_details.txt，stage 1 可直接在语义提示上训练。
 - 在 24 GB GPU 上按论文 batch 16、50+50 epochs 跑完整训练。
 - 增加按条件分组的 mAP50 统计（论文 Table 3 口径）。
 - 在同一 backbone 上重训 baseline，才能做论文级数值对照。

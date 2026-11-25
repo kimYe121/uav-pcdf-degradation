@@ -116,6 +116,11 @@ class ConditionTable:
     row_by_stem: dict[str, dict[str, str]]
     subset_by_stem: dict[str, str]
     columns: list[str] = field(default_factory=list)
+    # stem 只在划分内唯一（实测 1503 个 stem 同时出现在 val 与 test，且条件
+    # 完全不同），所以真实取值必须用 (subset, stem) 双键。
+    ids_by_split_stem: dict[tuple[str, str], np.ndarray] = field(default_factory=dict)
+    # 逐行的条件 id（含重复 stem），用于类别分布统计。
+    all_ids: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.int64))
 
     # ------------------------------------------------------------------ 属性
     @property
@@ -176,6 +181,8 @@ class ConditionTable:
         raw_rows: dict[str, dict[str, str]] = {}
         subset_by_stem: dict[str, str] = {}
         ids_by_stem: dict[str, np.ndarray] = {}
+        ids_by_split_stem: dict[tuple[str, str], np.ndarray] = {}
+        all_ids: list[np.ndarray] = []
         with open(index_path, "r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             columns = list(reader.fieldnames or [])
@@ -193,9 +200,12 @@ class ConditionTable:
                 clean = {key: str(value or "").strip() for key, value in row.items()}
                 raw_rows[stem] = clean
                 subset_by_stem[stem] = clean.get("subset", "")
-                ids_by_stem[stem] = np.array(
+                ids = np.array(
                     [s.resolve(clean.get(s.source, "")) for s in specs], dtype=np.int64
                 )
+                ids_by_stem[stem] = ids
+                ids_by_split_stem[(subset_by_stem[stem], stem)] = ids
+                all_ids.append(ids)
         if not ids_by_stem:
             raise RuntimeError(f"条件索引为空：{index_path}")
         return cls(
@@ -205,6 +215,8 @@ class ConditionTable:
             row_by_stem=raw_rows,
             subset_by_stem=subset_by_stem,
             columns=columns,
+            ids_by_split_stem=ids_by_split_stem,
+            all_ids=np.stack(all_ids, axis=0),
         )
 
     # ------------------------------------------------------------------ 提示
@@ -239,13 +251,29 @@ class ConditionTable:
         except KeyError as exc:
             raise KeyError(f"{stem} 不在 condition_index.csv 中") from exc
 
+    def ids_for(self, stem: str, subset: str | None = None) -> np.ndarray:
+        """按 ``(划分, stem)`` 取条件 id，这是数据管线应该用的入口。
+
+        ATR-UMOD 的 stem 只在**划分内**唯一：实测 1503 个 stem 同时出现在
+        val 与 test，且两边的天气/光照/时间完全不同。只用 stem 索引会让后读
+        到的行覆盖先读到的，测试集的条件被静默替换成验证集的——训练看不出
+        问题，但分条件统计和测试集条件诊断全是错的。
+        """
+        if subset:
+            hit = self.ids_by_split_stem.get((str(subset), stem))
+            if hit is not None:
+                return hit
+        return self.ids(stem)
+
     def class_distribution(self) -> dict[str, dict[str, int]]:
-        """统计每个属性的类别分布，便于检查条件码本是否正确。"""
+        """统计每个属性的类别分布，便于检查条件码本是否正确。
+
+        用逐行的 ``all_ids`` 而不是 ``ids_by_stem``：后者会把重复 stem 折叠掉，
+        统计出来会少 1503 行（正好是 test 划分）。
+        """
         out: dict[str, dict[str, int]] = {}
         for i, spec in enumerate(self.specs):
-            counts = np.bincount(
-                np.stack([v[i] for v in self.ids_by_stem.values()]), minlength=spec.n_classes
-            )
+            counts = np.bincount(self.all_ids[:, i], minlength=spec.n_classes)
             out[spec.key] = {spec.names[j]: int(c) for j, c in enumerate(counts)}
         return out
 

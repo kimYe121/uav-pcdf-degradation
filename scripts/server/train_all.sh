@@ -13,9 +13,10 @@
 #   - 被抢占/中断不会误开下一阶段，而是提示续训命令；
 #   - 阶段 1/2 的初始权重由 Python 侧按运行目录自动解析，脚本不再拼路径。
 #
-# 建议放 tmux：
-#   tmux new -s pcdf 'bash scripts/server/train_all.sh'
-#   断线后 tmux attach -t pcdf
+# 建议放 screen（断线不影响）：
+#   screen -dmS pcdf bash -lc 'cd <REMOTE> && bash scripts/server/train_all.sh'
+#   screen -r pcdf      # 进去看；Ctrl-a d 退出但不停止
+#   screen -X -S pcdf quit   # 需要时结束会话
 set -Eeuo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"

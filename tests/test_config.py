@@ -28,7 +28,8 @@ def test_base_config_is_paper_defaults() -> None:
     assert cfg.train.lr == pytest.approx(0.01)
     assert cfg.train.warmup_epochs == pytest.approx(0.0)
     assert cfg.train.profile == ""
-    assert cfg.model.head_type == "anchor"
+    assert cfg.model.backbone_yaml == "yolov5.yaml"
+    assert cfg.model.backbone_scale == "s"
 
 
 def test_profile_overrides_only_listed_fields() -> None:
@@ -39,7 +40,7 @@ def test_profile_overrides_only_listed_fields() -> None:
     assert cfg.train.warmup_epochs == pytest.approx(1.0)
     assert cfg.train.profile == "48g"
     # 未在档位里出现的字段保持基础配置
-    assert cfg.data.imgsz == (640, 512)
+    assert cfg.data.imgsz == (512, 640)
     assert cfg.model.widths == (128, 256, 256)
 
 
@@ -55,7 +56,7 @@ def test_cpu_profile_turns_off_amp() -> None:
     cfg = load_config(BASE, profile="cpu")
     assert cfg.train.amp is False
     assert cfg.data.workers == 0
-    assert cfg.data.imgsz == (320, 256)
+    assert cfg.data.imgsz == (256, 320)
 
 
 def test_unknown_profile_reports_available_names() -> None:
@@ -74,12 +75,12 @@ def test_dotted_override_and_type_coercion() -> None:
         "train.lr": "0.005",
         "train.amp": "false",
         "data.imgsz": "320,256",
-        "model.loss.anchor_box": "0.1",
+        "model.lambda_dt": "0.1",
     })
     assert cfg.train.lr == pytest.approx(0.005)
     assert cfg.train.amp is False
     assert cfg.data.imgsz == (320, 256)
-    assert cfg.model.loss.anchor_box == pytest.approx(0.1)
+    assert cfg.model.lambda_dt == pytest.approx(0.1)
 
 
 def test_validate_rejects_inconsistent_guidance_dim() -> None:
@@ -93,9 +94,10 @@ def test_validate_rejects_bad_imgsz() -> None:
         load_config(BASE, overrides={"data.imgsz": "300,200"})
 
 
-def test_validate_rejects_unknown_head_type() -> None:
-    with pytest.raises(ConfigError, match="head_type"):
-        load_config(BASE, overrides={"model.head_type": "dfl"})
+def test_validate_rejects_non_v5_backbone() -> None:
+    """只支持 YOLOv5 骨架；写别的 yaml 必须报错，避免"配置切了权重没切"。"""
+    with pytest.raises(ConfigError, match="只支持 YOLOv5"):
+        load_config(BASE, overrides={"model.backbone_yaml": "custom_backbone.yaml"})
 
 
 def test_paths_are_absolute_and_derived() -> None:
@@ -129,7 +131,7 @@ def test_to_dict_roundtrip() -> None:
     rebuilt.resolve_paths()
     rebuilt.validate()
     assert rebuilt.data.imgsz == cfg.data.imgsz
-    assert rebuilt.model.anchors == cfg.model.anchors
+    assert rebuilt.model.neck == cfg.model.neck
 
 
 def test_no_crlf_in_source_and_scripts() -> None:

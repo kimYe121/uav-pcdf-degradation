@@ -119,11 +119,24 @@ def test_resume_plan_rejects_stage_mismatch(tmp_path) -> None:
         plan_resume(cfg, state, stage=2)
 
 
-def test_resume_plan_rejects_structural_mismatch(tmp_path) -> None:
-    """结构字段（widths/head_type/…）不一致时不能"续训"，只能 --init。"""
-    saved = load_config(profile="yolo11s")
+def test_resume_plan_rejects_imgsz_change(tmp_path) -> None:
+    """输入几何不同不能续训：优化器/BN 统计量都建立在旧尺度上。"""
+    saved = load_config(overrides={"data.imgsz": "640,512"})
     state = load_training_state(_write(tmp_path, saved))
 
-    current = load_config()  # widths 128/256/256、anchor 头
+    current = load_config()  # 默认 (512,640)
+    with pytest.raises(CheckpointError, match="imgsz"):
+        plan_resume(current, state, stage=1)
+
+
+def test_resume_plan_rejects_structural_mismatch(tmp_path) -> None:
+    """结构字段（widths/backbone/guidance_dim）不一致时不能"续训"，只能 --init。"""
+    saved = load_config(overrides={
+        "model.widths": "256,256,512",
+        "model.guidance_dim": "512",
+    })
+    state = load_training_state(_write(tmp_path, saved))
+
+    current = load_config()  # widths 128/256/256、guidance_dim 256
     with pytest.raises(CheckpointError, match="结构字段"):
         plan_resume(current, state, stage=1)

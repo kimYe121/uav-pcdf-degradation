@@ -1,0 +1,28 @@
+{
+  "n_images": 1503,
+  "n_pred": 85646,
+  "n_gt": 15562,
+  "per_class_ap50": {
+    "bus": 0.8725266441850379,
+    "car": 0.698058700502509,
+    "crane": 0.6465153314984671,
+    "excavator": 0.47007506034604396,
+    "freight_car": 0.48943397107690867,
+    "motorcycle": 0.5292428518728455,
+    "suv": 0.5134978990743656,
+    "tank_truck": 0.6693552632143002,
+    "trailer": 0.38341747460388903,
+    "truck": 0.405605086448169,
+    "van": 0.5643484884559518
+  },
+  "map50": 0.5674615246616808,
+  "map50_95": NaN,
+  "checkpoint": "D:\\CodeResources\\DeepLearning\\courseTest\\runs\\pcdf_s1_native_frozen\\best.pt",
+  "arch": "pcdf",
+  "profile": "",
+  "imgsz": [
+    512,
+    640
+  ],
+  "split": "test"
+}

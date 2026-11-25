@@ -1,0 +1,28 @@
+{
+  "n_images": 1503,
+  "n_pred": 115304,
+  "n_gt": 15562,
+  "per_class_ap50": {
+    "bus": 0.879050749068213,
+    "car": 0.6977088355486936,
+    "crane": 0.6947203514599564,
+    "excavator": 0.3669905076817711,
+    "freight_car": 0.581648320844858,
+    "motorcycle": 0.5521030926173276,
+    "suv": 0.47745933361572795,
+    "tank_truck": 0.567864726085474,
+    "trailer": 0.37679406395643067,
+    "truck": 0.4027104793798805,
+    "van": 0.6168620061166216
+  },
+  "map50": 0.564901133306814,
+  "map50_95": NaN,
+  "checkpoint": "/root/rivermind-data/pcdf/runs/pcdf_s2/last.pt",
+  "arch": "pcdf",
+  "profile": "",
+  "imgsz": [
+    640,
+    512
+  ],
+  "split": "test"
+}

@@ -1,0 +1,28 @@
+{
+  "n_images": 1503,
+  "n_pred": 85499,
+  "n_gt": 15562,
+  "per_class_ap50": {
+    "bus": 0.8819178626088813,
+    "car": 0.6745944372793236,
+    "crane": 0.7055234295306819,
+    "excavator": 0.3865312116570992,
+    "freight_car": 0.5392187636087437,
+    "motorcycle": 0.5259509842732165,
+    "suv": 0.4765770190423078,
+    "tank_truck": 0.6681032151278883,
+    "trailer": 0.3388148357372473,
+    "truck": 0.42072635534966346,
+    "van": 0.5525156457235317
+  },
+  "map50": 0.5609521599944168,
+  "map50_95": NaN,
+  "checkpoint": "D:\\CodeResources\\DeepLearning\\courseTest\\runs\\base50pub\\best.pt",
+  "arch": "baseline",
+  "profile": "",
+  "imgsz": [
+    640,
+    512
+  ],
+  "split": "test"
+}

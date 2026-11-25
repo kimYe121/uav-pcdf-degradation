@@ -35,8 +35,7 @@ Condition ids ──► IPC ──► CLIP(冻结) ──► Fc 硬门控 ──
 
 - `RGB Encoder`、`IR Encoder` 各自输出 P3/8、P4/16、P5/32 三层特征。
 - 代码：`src/pcdf/models/encoder.py::Backbone`
-  - 默认 YOLOv5s：`yolov5.yaml` + `scale: s`，taps 为 `model.save[:3]`（4/6/10）。
-  - 也支持 YOLO11-OBB（`yolo11*-obb.yaml`），由 profile 切换。
+  - YOLOv5s：`yolov5.yaml` + `scale: s`，taps 为 `model.save[:3]`（4/6/10）。
   - 输入为 6 通道，`x[:, :3]` 进 RGB 分支，`x[:, 3:]` 进 IR 分支；IR 是灰度复制
     成 3 通道，因此两个分支的第一层卷积都能直接加载 RGB 预训练权重，不需要
     通道膨胀。
@@ -85,8 +84,8 @@ Condition ids ──► IPC ──► CLIP(冻结) ──► Fc 硬门控 ──
 可加，否则原始 Frobenius 范数会随空间尺寸增长并压过检测损失。
 
 **`L_dc`（Eq. 8）**：把**同一个 OBB head** 分别作用在 `F_v,rgb` 和 `F_v,ir` 上，
-用同一个 `v8OBBLoss` 计算分类/回归/目标性损失。共享 head 不增加参数，也保证
-“判别能力”与主检测任务定义一致。OBB head 额外含角度损失，属于检测器本身。
+用同一套检测损失（`box + cls + dfl + angle`）计算分类与回归。共享 head 不增加
+参数，也保证"判别能力"与主检测任务定义一致。OBB 的角度项属于检测器本身。
 
 **`L_dec`（Eq. 9）**：`0.01·L_dt + 0.003·L_irr + 0.01·L_dc`。
 
@@ -94,10 +93,18 @@ Condition ids ──► IPC ──► CLIP(冻结) ──► Fc 硬门控 ──
 
 代码：`src/pcdf/models/blocks.py::ChannelNormSoftGate`。
 
-- 引导向量 `g`（256 维）经每层独立的 2 层 MLP 映射为 `2·C_l` 个 logits。
+- 软门控的输入按 **Fig. 4 是三路**：条件引导 `g`（256 维）、`GAP(F_v,rgb)`、
+  `GAP(F_v,ir)`。图里蓝/橙两支箭头明确指向同一个
+  `Channel Normalized Soft-gating` 方框——门控要"看着当前特征"决定该信谁，
+  只喂引导会让权重与特征内容脱钩。
+- 每层独立的 2 层 MLP 把 `(guidance_dim + 2·C_l)` 映射为 `2·C_l` 个 logits。
 - reshape 成 `(B, 2, C_l, 1, 1)` 后在第 2 维（模态维）做 softmax：
   `W_rgb + W_ir = 1`（逐通道）。
 - `F_f = Concat(W_rgb ⊙ F_v,rgb, W_ir ⊙ F_v,ir)`，只重加权条件不变特征。
+- **三个 Detection 都接在 Reassigned 特征上**（Fig. 4）：
+  - 主头：`F_f` → neck → head；
+  - 辅助头（式 8 的 `L_dc`）：`head(W_rgb ⊙ F_v,rgb)`、`head(W_ir ⊙ F_v,ir)`，
+    与主头共享参数。早期实现把辅助头接在重加权之前的 `F_v` 上，与图不符。
 - 引导来源：
   - 阶段 1：`text_adapter(F_t)`（文本条件引导）；
   - 阶段 2 / 测试：`GAP(F_s)`（视觉条件引导）。
@@ -146,15 +153,18 @@ baseline 预训练；Fig. 10 Stage I 中 CDF 权重直接作用于 encoder 特�
 | CDF 引导 `g` | `(B,256)` |
 | 融合特征 | P3 `(B,256,64,80)`，P4 `(B,512,32,40)`，P5 `(B,512,16,20)` |
 | Neck 输出 | `(B,128,64,80)`、`(B,256,32,40)`、`(B,256,16,20)` |
-| Head 输出（anchor） | `(B, 3×(5+1+11)=51, 20160)` |
+| Head 输出（训练态） | `dict(boxes, scores, angle, feats)` |
+| `boxes` | `(B, 4·reg_max=64, 6720)`，DFL 分布 + 中心点 |
+| `scores` / `angle` | `(B, 11, 6720)` / `(B, 1, 6720)` |
+| `feats` | P3/P4/P5 三层 raw 特征，供 TAL 分配使用 |
+| Head 输出（推理态） | `(B, 4+nc+1=16, 6720)`，直接进旋转 NMS |
 
-20160 = 3 个 anchor × (64·80 + 32·40 + 16·20) 个格子；每格 51 维 =
-`tx, ty, tw, th, tθ, obj, cls_0..cls_10`。解码后供 NMS 的张量是
-`(B, 4+nc+1=16, 20160)`。
+6720 = 64·80 + 32·40 + 16·20 个格子。OBB 头是 anchor-free，每格一个预测，
+所以没有 anchor 维；解码后的 16 维 = `cx, cy, w, h, cls_0..cls_10, θ`。
 
 ---
 
-## 4. 参数量（默认：YOLOv5s + anchor 头）
+## 4. 参数量（默认：YOLOv5s + OBB 头）
 
 | 部分 | 参数量 |
 |---|---:|
@@ -163,14 +173,20 @@ baseline 预训练；Fig. 10 Stage I 中 CDF 权重直接作用于 encoder 特�
 | S + V_rgb + V_ir | 4.579 M |
 | SCPL gate | 0.264 M |
 | text adapter | 0.197 M |
-| CDF | 0.116 M |
+| CDF | 0.190 M |
 | PAN neck | 2.247 M |
-| anchor OBB head | 0.033 M |
-| **合计** | **16.04 M** |
-| 阶段 2 可训练（冻结 SCPL + adapter 后） | 6.98 M |
+| OBB head | 0.853 M |
+| **合计** | **16.94 M** |
+| 阶段 2 可训练（冻结 SCPL + adapter 后） | 16.48 M |
 | CLIP ViT-B/16 文本编码器（冻结，不入 state_dict） | 63.17 M |
 
-baseline（阶段 0）只含两个 encoder + neck + head = **10.89 M**。
+baseline（阶段 0）只含两个 encoder + neck + head = **11.71 M**，除 DFL 的
+16 个固定积分核之外全部可训练。`neck: concat` 档（拼接直连检测头）为 10.87 M。
+
+> 回归提醒：Ultralytics 发布的 .pt 里参数是 `requires_grad=False`（推理态保存）。
+> Backbone 从检查点搬层时若不开回 `requires_grad`，两个 encoder（8.6 M）会被
+> 静默冻结——stage 0 只剩 neck/head 在学（3.10 M），stage 2 也一样。
+> `Backbone.__init__` 已统一打开，`tests/test_baseline.py` 有回归用例守着。
 
 实测（RTX 4060 Laptop 8 GB，AMP，640×512）：阶段 1 batch 4 峰值 0.62 GB，
 阶段 2 batch 4（含两个辅助 head 前向）峰值 **2.90 GB**。batch 16 需要 24 GB
@@ -197,7 +213,7 @@ baseline（阶段 0）只含两个 encoder + neck + head = **10.89 M**。
 
 | 项目 | 选择 | 影响 |
 |---|---|---|
-| 检测器 family | YOLOv5s backbone + 自建 PAN + anchor OBB head | 无法与论文 63.1 直接横比 |
+| 检测器 family | YOLOv5s backbone + 自建 PAN + ultralytics OBB head | 无法与论文 63.1 直接横比 |
 | 融合尺度 | P3/P4/P5 三层 | 论文未说明；单尺度会损失小目标 |
 | `S/V` 内部结构 | 1×1 + 3×3 Conv，通道保持 | 论文只称 “encoder” |
 | `F(·,·)` 融合函数 | 通道拼接 + 1×1 Conv | 论文未说明 |
@@ -207,16 +223,16 @@ baseline（阶段 0）只含两个 encoder + neck + head = **10.89 M**。
 | 门控梯度 | straight-through estimator | 硬掩码本身不可微 |
 | `L_dt` 投影 | `F_s` 与 `F_t` 都投到引导空间 | 两者原始维度不同（256 vs 512） |
 | `L_irr` 归一化 | 除以 `C·H·W` | 原式未归一化，直接相加会尺度爆炸 |
-| `L_dc` | 共享主 head，含角度损失 | 论文 Eq. 8 写 cls/reg/obj；OBB 需角度 |
+| `L_dc` | 共享主 head，含角度损失 | 论文 Eq. 8 写 cls/reg/obj；OBB 用 TAL + DFL + 角度 |
 | 文本嵌入 | `CLIPTextModel` + 官方 `text_projection` | 与 CLIP `get_text_features` 对齐 |
 | 增强 | 仿射 + 水平翻转；无 mosaic / HSV | mosaic 强制方形画布，HSV 会改 IR |
 | AMP / clip | 开启 AMP、grad clip 10；warmup 关闭、`nesterov=False` | 论文未说明，取框架默认值 |
-| 条件码本 | 天气/光照/场景保留匿名整数类 | 官方 codebook 未公开，不臆造语义 |
+| 条件码本 | 官方码本（attribute_details.txt）+ B.2 合并 | 见下方 5.3 第 2 条 |
 
-### 5.4 检测头对齐（式 8 的 L_obj）
+### 5.4 检测头选择（式 8 的 L_obj）
 
-论文式 8 写的是 `L_cls + L_reg + L_obj`，objectness 是 anchor-based 检测器的标志
-（YOLOv8/v11 的 anchor-free 头没有这一项）。结合以下证据，本项目提供两套头：
+论文式 8 写的是 `L_cls + L_reg + L_obj`，objectness 是 anchor-based 检测器的
+标志（YOLOv8/v11 的 anchor-free 头没有这一项）。骨架侧的 v5 证据仍然成立：
 
 - 一作 `supercpy` 公开 fork 了 **ultralytics/yolov5 v7.0**（跨仓库 compare：
   `ahead_by=0, files=[]`，即纯 fork、无改动），说明其代码基线是 v5；
@@ -224,29 +240,46 @@ baseline（阶段 0）只含两个 encoder + neck + head = **10.89 M**。
   默认配方（v5 的 `hyp.scratch-low.yaml`）；
 - 对比表放 YOLOv5s 而非 v8/v11，实验框架属于 v5 时代。
 
-| | `head_type: anchor`（默认，对齐式 8） | `head_type: v8`（YOLO11 系对照） |
-|---|---|---|
-| 结构 | 1×1 卷积 → 3 anchor × (5 + 1 + nc) | Ultralytics `OBB`：anchor-free、DFL(reg_max=16) + 角度 |
-| objectness | **有**（bias 先验 0.02） | 无 |
-| 分配 | 中心格 + 四邻域 + 宽高比阈值 0.25 | TAL |
-| 损失 | `L_obj + L_cls + (1 − ProbIoU)` | `v8OBBLoss`（cls/box/dfl/angle） |
-| 锚框 | 训练集 128,935 框 k-means，见 `model.anchors` | — |
+但 `L_obj` 只约束**损失写法**，不约束头的实现。仓库早期按 v5 复刻了一个
+anchor-based 旋转头（中心格 + 四邻域匹配、宽高比阈值 0.25、ProbIoU 回归、
+逐尺度 obj/cls 先验、k-means 锚框），实测收敛不了：
 
-`configs/pcdf.yaml` 默认把骨架与这个头绑定（v5s 4.303 M/分支 + anchor 头，
-总参数 16.04 M，baseline 10.89 M）。式 9 的三项权重仍为 0.01 / 0.003 / 0.01，
-`L_dc` 包含 objectness——三个分支共用同一个头，因此 `L_obj` 也会回传到
-`F_v,rgb` 与 `F_v,ir`。
+| 检测头 | 步数 | best mAP50 |
+|---|---|---:|
+| 自写 anchor 头（5 邻域 + ProbIoU） | 600 | **0.6116** |
+| ultralytics OBB（anchor-free + DFL）独立脚本 | 300 | **0.9611** |
+| ultralytics OBB 集成进本仓库 | 300 | **0.9478** |
 
-切换骨架只需改配置（`profiles/yolo11s.yaml`）：`backbone_yaml / backbone_scale /
-widths / guidance_dim / head_type / encoder_weights`，代码无需改动。
+复现目标 58.4 / 63.1 只能由一个真的能收敛的检测器产生，因此自写头**已整体
+删除**（连同锚框 k-means、`model.anchors`、`model.loss.anchor_*` 配置），
+仓库只保留 ultralytics 的 anchor-free OBB：
+
+| 项目 | 实现 |
+|---|---|
+| 结构 | 每尺度 `Conv3×3 → Conv3×3 → 1×1`，输出 `64(DFL) + nc + 1(θ)` |
+| objectness | **无**（anchor-free，每格一个预测） |
+| 分配 | TAL（Task-Aligned Assigner，top-k 10） |
+| 损失 | `box + cls + dfl + angle`（`v8OBBLoss`，增益 7.5 / 0.5 / 1.5 / 1.0） |
+| 锚框 | 无 |
+
+`configs/pcdf.yaml` 把骨架与这个头绑定（v5s 4.303 M/分支 + OBB 头 0.853 M，
+总参数 16.94 M，baseline 11.71 M）。式 9 的三项权重仍为 0.01 / 0.003 / 0.01。
+`L_dc` 因此是 `v8OBBLoss` 在 `F_v,rgb` 与 `F_v,ir` 上的和——三个分支共用同一个
+头，梯度也回传到两条解耦分支。
+
+骨架与头都不提供第二套选择：论文没有给出可对照的检测器 family，多一个档位只会
+增加"配置切了、权重没切"的错配风险。运行时会反查权重档位，不一致直接报错。
 
 ### 5.3 已知不可复现项
 
 1. **官方检测器结构、neck、OBB head 实现未公开**，因此不承诺 63.1 mAP50。
-2. **天气/光照/场景的官方 code→name 映射未公开**，默认使用
-   `weather type k` / `illumination level k` / `scenario k`。替换
-   `configs/conditions.yaml` 中的 `codes/names` 即可接入官方码本；高度/角度/时间
-   已按 B.2 合并。
+2. ~~天气/光照/场景的官方 code→name 映射未公开~~ —— **已解决**：数据集仓库
+   supercpy/ATR-UMOD/attribute_details.txt 给出全部整数码含义，
+   configs/conditions.yaml 已按它填写，提示句直接使用自然语言（例如
+   over road in the urban villages, ..., in sunny, in normal illumination）。
+   天气按 B.2 把 Rainy/After Rain 并入 Cloudy、四个夜间码（Sunny_Night /
+   Cloudy_Night / Sunny_Near_Night / Cloudy_Near_Night）并入 Night；光照把
+   Overexposure 并入 Normal、Pre/Post-Twilight 并入 Dim。
 3. 论文的 batch 16、三阶段共 150 epochs 在 8 GB 本地无法完整执行；
    配置保留论文值，小显存请用 `--batch` / `--imgsz` 覆盖。
 4. 论文正文说 `w/o PCD` 下降 1.2，Table 4 是 63.1 vs 62.1（1.0），本仓库不裁决
@@ -271,6 +304,10 @@ widths / guidance_dim / head_type / encoder_weights`，代码无需改动。
 
 数据划分：`train 10054 / val 1796 / test 1503`，val 由 train 内按
 `location + 日期` 的场景组留出，避免同场景泄漏。
+
+> **评估口径**：`val` 与 train 场景零重叠且长尾类别样本极少（bus 78 / crane 44），
+> 同一权重 val 比 test 低约 16 点（实测 27.03 vs 43.00）。**对外数字只用
+> `--split test`**，与论文 Table 2/4 同口径；`val` 仅用于选 `best.pt`。
 
 ---
 
@@ -306,8 +343,7 @@ src/pcdf/
   download.py      断点续传下载（CLIP 与骨架权重共用）
   models/
     encoder.py     双流 backbone（YOLOv5 / YOLO11 两族）+ 档位校验
-    heads.py       检测头工厂 + 统一初始化顺序
-    anchor_head.py 式 8 的 anchor 头与损失（增益来自配置）
+    heads.py       检测头装配 + 统一初始化顺序 + 检测损失（v8OBBLoss）
     blocks.py      SCPLGate / DecoupleBranch / CDF / PAN / 引导投影
     scpl.py        SCPL 前向与 straight-through
     baseline.py    双流 concat baseline（阶段 0）
@@ -375,7 +411,7 @@ python -m pcdf.cli.train --stage 1 --batch 2 --imgsz 320 256 \
 
 | 类别 | 字段 | 规则 |
 |---|---|---|
-| 结构 | `widths` / `head_type` / `backbone_*` / `guidance_dim` / `data.names` | 必须一致，否则报错并提示训练时档位 |
+| 结构 | `widths` / `backbone_*` / `guidance_dim` / `data.names` | 必须一致，否则报错并提示训练时档位 |
 | 配方 | `batch` / `lr` / `warmup_*` / `grad_accum` / `amp` | 以检查点为准 |
 | 轮数 | `epochs_total` | 默认沿用；`--epochs` 显式覆盖 |
 | 环境 | `imgsz` | 不一致只警告（通常不该改） |

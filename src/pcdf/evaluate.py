@@ -39,6 +39,8 @@ def evaluate_obb(
     max_batches: int = 0,
     thresholds: tuple[float, ...] = (0.5,),
     names: list[str] | None = None,
+    guidance: str = "visual",
+    fuse: str | None = None,
 ) -> dict:
     """在给定 DataLoader 上计算 mAP。
 
@@ -51,6 +53,8 @@ def evaluate_obb(
         max_batches: 限制评估 batch 数（调试用，0 表示全部）。
         thresholds: IoU 阈值；``(0.5,)`` 只算 mAP50。
         names: 类别名，用于逐类结果的可读输出。
+        guidance: ``visual``（stage2/测试部署设定）或 ``text``（stage1 检查点：
+            PCD 尚未训练，视觉引导通路是随机初始化，必须用文本引导评）。
 
     Returns:
         ``{"map50", "map50_95", "per_class_ap50", "n_images", "n_gt", "n_pred"}``。
@@ -66,12 +70,21 @@ def evaluate_obb(
         if max_batches and batch_index >= max_batches:
             break
         images = batch["img"].to(device, non_blocking=True)
-        out = model(images, guidance="visual")
+        fwd = {"cond": batch.get("cond"), "guidance": guidance}
+        if fuse is not None:
+            fwd["fuse"] = fuse
+        out = model(images, **fwd)
         preds = out["main"]
         if isinstance(preds, tuple):
             preds = preds[0]
         dets = non_max_suppression(
-            preds, conf_thres=conf, iou_thres=iou, nc=nc, rotated=True, max_det=max_det
+            preds, conf_thres=conf, iou_thres=iou, nc=nc, rotated=True,
+            max_det=max_det,
+            # 640×512 时三尺度共 80·64+40·32+20·16 = 6720 个候选，全量送进旋转
+            # NMS 会触发 "NMS time limit 4.4s exceeded"，一次验证要好几个小时。
+            # 按置信度先截前 3000 个候选（最终 max_det 只有 300），
+            # mAP@0.5 不受影响，单图 NMS 从秒级降到毫秒级。
+            max_nms=3000,
         )
 
         height, width = images.shape[-2:]

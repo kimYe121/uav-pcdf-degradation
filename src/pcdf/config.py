@@ -31,7 +31,7 @@ from typing import Any, Mapping, Sequence, get_args, get_origin, get_type_hints
 
 import yaml
 
-from .constants import DEFAULT_ANCHORS, DEFAULT_NAMES, STRIDES
+from .constants import DEFAULT_NAMES, STRIDES
 from .paths import (
     DEFAULT_CONFIG_PATH,
     ENV_CLIP_DIR,
@@ -45,7 +45,6 @@ __all__ = [
     "ConfigError",
     "Config",
     "DataConfig",
-    "LossConfig",
     "ModelConfig",
     "PathsConfig",
     "TrainConfig",
@@ -105,7 +104,10 @@ class DataConfig:
     val_split: str = "val"
     modality_dir: str = "ir"
     pair_dir: str = "rgb"
-    imgsz: tuple[int, int] = (640, 512)  # 论文 Sec. 5.1，顺序为 (H, W)
+    # 顺序为 (H, W)。论文 Sec. 5.1 的 640×512 是 W×H，而 ATR-UMOD 源图就是
+    # 640×512（W×H），所以这里是 (512, 640)——写成 (640, 512) 会让数据处理
+    # 把宽 640 压到 512、高 512 插值到 640，非等比拉伸 1.56 倍且丢横向细节。
+    imgsz: tuple[int, int] = (512, 640)
     batch: int = 16  # 论文 batch；小显存请用 --batch 或 profile 覆盖
     workers: int = 4
     names: list[str] = field(default_factory=lambda: list(DEFAULT_NAMES))
@@ -117,8 +119,9 @@ class DataConfig:
     eval_thresholds: int = 0  # >0 时额外计算 mAP50-95（10 个阈值）
 
     # 数据增强：论文未说明，详见 docs/ARCHITECTURE.md。
-    # 有意关闭 mosaic 与 HSV：mosaic 会强制方形画布（论文为 640×512），
-    # HSV 会同时改变复制到 3 通道的红外图像。
+    #   degrees/translate/scale/shear/perspective/flip_*：几何增强（Ultralytics）
+    #   mosaic：4 图拼 2×2 后随机裁回输入尺寸；本仓库实现，支持 6 通道与旋转框
+    #   hsv_*：只作用于 RGB 三通道，IR 通道原样（否则等于伪造红外辐照度）
     degrees: float = 0.0
     translate: float = 0.1
     scale: float = 0.5
@@ -126,6 +129,10 @@ class DataConfig:
     perspective: float = 0.0
     flip_p: float = 0.5
     flip_vertical: float = 0.0
+    mosaic: float = 0.0
+    hsv_h: float = 0.0
+    hsv_s: float = 0.0
+    hsv_v: float = 0.0
     fraction: float = 1.0
 
     @property
@@ -143,28 +150,13 @@ class DataConfig:
 
 
 @dataclass
-class LossConfig:
-    """检测损失增益。
-
-    两套检测头的量纲不同，因此增益分开配置：anchor 头的回归项是
-    ``1 - ProbIoU``（0~1 量级），v8 头是 CIoU + DFL（数值大一个量级）。
-    混用一组增益会让其中一族的损失被压死，所以不共用。
-    """
-
-    # anchor-based（论文式 8）：L_obj + L_cls + L_reg
-    anchor_box: float = 0.05
-    anchor_cls: float = 0.5
-    anchor_obj: float = 1.0
-    anchor_thr: float = 0.25  # 锚框匹配的边长比阈值（与 YOLOv5 的 1/4 一致）
-    # Ultralytics v8/v11 anchor-free：box + cls + dfl
-    v8_box: float = 7.5
-    v8_cls: float = 0.5
-    v8_dfl: float = 1.5
-
-
-@dataclass
 class ModelConfig:
     """PCDF 结构、检测头与损失权重。
+
+    骨架与检测头是**固定的**：YOLOv5 backbone + ultralytics OBB 头（anchor-free
+    + DFL）。论文未公开检测器 family，本仓库只实现实测最能收敛的一种（见
+    :mod:`pcdf.models.heads`），不再提供其它骨架或检测头档位，避免"配置写 s、
+    权重是 n"这类错配。
 
     ``widths`` 是 P3/P4/P5 通道数。``guidance_dim`` 必须等于 P5 通道数：
     阶段 1 的文本引导与阶段 2/测试的 ``GAP(F_s)`` 共用同一空间，CDF 投影器
@@ -172,18 +164,16 @@ class ModelConfig:
     """
 
     widths: tuple[int, int, int] = (128, 256, 256)
-    # "v8"     —— Ultralytics anchor-free OBB 头（DFL + 角度）；
-    # "anchor" —— 论文式 8 对应的 YOLOv5 风格 anchor-based 头（含 objectness）。
-    head_type: str = "v8"
-    # Ultralytics 的检测模型 yaml；换档位时与 widths、guidance_dim 一起改。
+    # 融合后的颈部：
+    #   "pan"    —— 通道拼接后接 PAN（YOLOv5 标配，保留 top-down/bottom-up）
+    #   "concat" —— 严格照论文 Fig. 4：`F` 只是 Channel Concatenation（图例原文），
+    #               拼接后直接进检测头，没有额外颈部。此时检测头输入变为 2C。
+    # 论文正文与图都没画 neck，但 baseline 58.4 是"一个双流检测器"，v5 系检测器
+    # 不可能没有颈部；两档都保留，用 baseline 的 mAP 实测决定。
+    neck: str = "pan"
+    # Ultralytics 的 YOLOv5 结构 yaml；scale 为 n/s/m/l/x。
     backbone_yaml: str = "yolov5.yaml"
-    # 仅 yolov5.yaml 使用：该 yaml 不带规模后缀，需显式指定 n/s/m/l/x。
     backbone_scale: str = "s"
-    reg_max: int = 16
-    # anchor 头的默认锚框；留空则用 constants 中的 k-means 结果。
-    anchors: dict[int, list[tuple[int, int]]] = field(
-        default_factory=lambda: {k: list(v) for k, v in DEFAULT_ANCHORS.items()}
-    )
 
     tau: float = 0.15  # 补充材料 Sec. G
     lambda_dt: float = 0.01  # 式 9
@@ -201,8 +191,6 @@ class ModelConfig:
     guidance_dim: int = 256
     gate_pool: str = "max"
     text_cache_size: int = 8192
-
-    loss: LossConfig = field(default_factory=LossConfig)
 
     @property
     def strides(self) -> tuple[int, int, int]:
@@ -225,6 +213,11 @@ class TrainConfig:
     grad_accum: int = 1
     seed: int = 0
     deterministic: bool = True
+
+    # 阶段 1 的冻结范围。论文只写了"frozen text encoder of CLIP"，
+    # 另有一句 "training only the SCPL and CDF modules"；后者可读成
+    # "检测器不更新"（默认）。设 True 则阶段 1 也训练检测器，只冻结 CLIP。
+    stage1_train_detector: bool = False
 
     eval_interval: int = 5  # <=0 表示不验证
     val_batches: int = 0  # 0 表示完整验证集
@@ -266,7 +259,7 @@ class Config:
     def apply(self, overrides: Mapping[str, Any] | None) -> "Config":
         """按键值对覆盖配置；值为 ``None`` 的条目被忽略。
 
-        键支持点号路径（``train.lr``、``model.loss.anchor_box``），值会按目标
+        键支持点号路径（``train.lr``、``model.lambda_dt``），值会按目标
         字段声明的类型做转换，因此 ``--set train.amp=false`` 也能正确得到布尔。
         """
         if not overrides:
@@ -324,6 +317,16 @@ class Config:
                 problems.append(f"data.{name} 必须落在 (0, 1]，当前 {value}")
         if data.eval_max_det < 1:
             problems.append(f"data.eval_max_det 必须 >= 1，当前 {data.eval_max_det}")
+        for name in ("mosaic", "flip_p", "flip_vertical"):
+            value = float(getattr(data, name))
+            if not 0.0 <= value <= 1.0:
+                problems.append(f"data.{name} 必须落在 [0, 1]，当前 {value}")
+        for name in ("hsv_h", "hsv_s", "hsv_v"):
+            value = float(getattr(data, name))
+            if not 0.0 <= value <= 1.0:
+                problems.append(f"data.{name} 必须落在 [0, 1]，当前 {value}")
+        if float(data.scale) < 0.0:
+            problems.append(f"data.scale 不能为负，当前 {data.scale}")
 
         if len(model.widths) != 3:
             problems.append(f"model.widths 必须是三个尺度的通道数，当前 {model.widths}")
@@ -332,9 +335,12 @@ class Config:
                 "model.guidance_dim 必须等于 P5 通道数（阶段 2 的 GAP(F_s) 直接驱动 CDF），"
                 f"当前 guidance_dim={model.guidance_dim}，P5={model.widths[2]}"
             )
-        if model.head_type not in ("v8", "anchor"):
-            problems.append(f"model.head_type 只能是 v8 / anchor，当前 {model.head_type!r}")
-        if "yolov5" in model.backbone_yaml and model.backbone_scale not in V5_SCALES:
+        if "yolov5" not in model.backbone_yaml:
+            problems.append(
+                f"model.backbone_yaml 只支持 YOLOv5（当前 {model.backbone_yaml!r}）；"
+                "本项目不提供其它骨架档位"
+            )
+        elif model.backbone_scale not in V5_SCALES:
             problems.append(
                 f"model.backbone_scale 只能是 {sorted(V5_SCALES)}，当前 {model.backbone_scale!r}"
             )
@@ -345,16 +351,11 @@ class Config:
                 problems.append(f"model.{name} 不能为负")
         if model.gate_pool not in ("max", "avg"):
             problems.append(f"model.gate_pool 只能是 max / avg，当前 {model.gate_pool!r}")
-        if model.head_type == "anchor":
-            missing = [s for s in STRIDES if s not in model.anchors]
-            if missing:
-                problems.append(f"model.anchors 缺少尺度 {missing} 的锚框")
-            else:
-                for stride, boxes in model.anchors.items():
-                    if len(boxes) != 3:
-                        problems.append(f"model.anchors[{stride}] 必须正好 3 个锚框")
-                    if any(min(w, h) <= 0 for w, h in boxes):
-                        problems.append(f"model.anchors[{stride}] 存在非正宽高")
+        if model.neck not in ("pan", "concat"):
+            problems.append(
+                f"model.neck 只能是 pan（YOLOv5 颈部）或 concat（Fig. 4 的字面接线），"
+                f"当前 {model.neck!r}"
+            )
 
         if train.epochs < 1:
             problems.append(f"train.epochs 必须 >= 1，当前 {train.epochs}")
