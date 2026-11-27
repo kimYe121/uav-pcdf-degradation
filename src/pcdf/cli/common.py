@@ -102,6 +102,8 @@ def config_from_checkpoint(checkpoint_cfg: Mapping[str, Any], env: Config) -> Co
     raw = dict(checkpoint_cfg)
     raw["paths"] = env.to_dict()["paths"]
     cfg = Config.from_dict(raw)
+    # 结构取检查点，"去哪找文件"取本机：条件码本/骨干 yaml/预训练权重/CLIP。
+    cfg.adopt_runtime_paths(env)
     cfg.train.profile = env.train.profile
     apply_path_env(cfg)
     cfg.resolve_paths()

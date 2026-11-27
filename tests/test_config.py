@@ -145,3 +145,20 @@ def test_no_crlf_in_source_and_scripts() -> None:
             if path.is_file() and b"\r\n" in path.read_bytes():
                 bad.append(str(path.relative_to(ROOT)))
     assert not bad, f"以下文件含 CRLF：{bad}"
+
+def test_checkpoint_cfg_adopts_local_runtime_paths() -> None:
+    """Windows 训练、Linux 评估：运行时路径取本机，结构字段保持检查点。"""
+    ckpt = load_config().to_dict()
+    ckpt["model"]["condition_spec"] = r"D:\old\configs\conditions.yaml"
+    ckpt["model"]["backbone_yaml"] = r"D:\old\yolov5.yaml"
+    ckpt["model"]["encoder_weights"] = r"D:\old\weights\yolov5su.pt"
+    ckpt["model"]["text_encoder"] = r"D:\old\weights\clip-vit-base-patch16"
+
+    cfg = Config.from_dict(ckpt)
+    env = load_config()
+    cfg.adopt_runtime_paths(env)
+
+    for key in ("condition_spec", "backbone_yaml", "encoder_weights", "text_encoder"):
+        assert getattr(cfg.model, key) == getattr(env.model, key), key
+    assert cfg.model.widths == env.model.widths
+

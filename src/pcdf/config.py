@@ -255,6 +255,17 @@ class Config:
         """转成可安全写入 YAML/JSON 的纯 Python 结构（tuple -> list）。"""
         return _normalise(self)
 
+    def adopt_runtime_paths(self, env: "Config") -> None:
+        """把模型段里的运行时路径换成本机配置，结构字段保持不动。
+
+        检查点保存的 ``cfg`` 来自训练机；换机器评估时，网络结构（widths、
+        backbone 等）必须取检查点，但"去哪找条件码本、骨干 yaml、预训练权重、
+        CLIP 目录"必须取当前环境，否则 Windows 训练、Linux 评估会去找
+        ``D:\\...`` 这种不存在的路径。
+        """
+        for key in ("condition_spec", "backbone_yaml", "encoder_weights", "text_encoder"):
+            setattr(self.model, key, getattr(env.model, key))
+
     # ------------------------------------------------------------------ 覆盖
     def apply(self, overrides: Mapping[str, Any] | None) -> "Config":
         """按键值对覆盖配置；值为 ``None`` 的条目被忽略。
