@@ -101,15 +101,18 @@ class ChannelNormSoftGate(nn.Module):
     两模态互补的权重曲线（Fig. 4 中间那张以 0.5 为中心的图）。
     """
 
-    def __init__(self, guidance_dim: int, channels: tuple[int, int, int]) -> None:
+    def __init__(
+        self, guidance_dim: int, channels: tuple[int, int, int], mode: str = "guide_pool"
+    ) -> None:
         super().__init__()
+        self.mode = mode
         self.projections = nn.ModuleList()
         for c in channels:
             hidden = max(c // 4, 32)
+            in_dim = guidance_dim + 2 * c if mode == "guide_pool" else guidance_dim
             self.projections.append(
                 nn.Sequential(
-                    # guidance + 两个模态的池化特征
-                    nn.Linear(guidance_dim + 2 * c, hidden),
+                    nn.Linear(in_dim, hidden),
                     nn.GELU(),
                     nn.Linear(hidden, 2 * c),
                 )
@@ -129,9 +132,13 @@ class ChannelNormSoftGate(nn.Module):
         weighted_ir: list[Tensor] = []
         for proj, xr, xi in zip(self.projections, fv_rgb, fv_ir):
             b, c = xr.shape[:2]
-            pool_r = xr.mean(dim=(2, 3))
-            pool_i = xi.mean(dim=(2, 3))
-            logits = proj(torch.cat([guidance, pool_r, pool_i], dim=1)).view(b, 2, c, 1, 1)
+            if self.mode == "guide_pool":
+                pool_r = xr.mean(dim=(2, 3))
+                pool_i = xi.mean(dim=(2, 3))
+                inp = torch.cat([guidance, pool_r, pool_i], dim=1)
+            else:
+                inp = guidance
+            logits = proj(inp).view(b, 2, c, 1, 1)
             w = logits.softmax(dim=1)  # 每个通道在两个模态间归一化
             wr, wi = w[:, 0] * xr, w[:, 1] * xi
             weighted_rgb.append(wr)

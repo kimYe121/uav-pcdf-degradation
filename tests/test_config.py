@@ -167,3 +167,8 @@ def test_rejects_bad_stage2_fuse() -> None:
     with pytest.raises(ConfigError, match="stage2_fuse"):
         load_config(overrides={"train.stage2_fuse": "concat"})
 
+def test_rejects_bad_cdf_input() -> None:
+    """CDF 输入只允许 guide（Eq.10）/ guide_pool（旧实现）。"""
+    with pytest.raises(ConfigError, match="cdf_input"):
+        load_config(overrides={"model.cdf_input": "both"})
+

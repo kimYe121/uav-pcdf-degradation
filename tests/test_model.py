@@ -124,12 +124,21 @@ def test_aux_heads_use_reassigned_features(setup) -> None:
     model.zero_grad(set_to_none=True)
 
 
-def test_soft_gate_sees_modality_features(setup) -> None:
-    """Fig. 4：软门控的输入除引导外还含两个模态的特征（投影层输入维度）。"""
+def test_soft_gate_input_modes(setup) -> None:
+    """Eq.10：投影只吃 F_s；guide_pool 保留 Fig.4 的三路输入作为可选档位。"""
     cfg, table, model = setup
-    c3 = cfg.model.widths[0]
-    first = model.cdf.projections[0][0]
-    assert first.in_features == cfg.model.guidance_dim + 2 * c3
+    # 配置默认（configs/pcdf.yaml）= guide
+    assert model.cdf.projections[0][0].in_features == cfg.model.guidance_dim
+
+    cfg_pool = load_config()
+    cfg_pool.model.cdf_input = "guide_pool"
+    pooled = PCDFNet(
+        cfg_pool.model, nc=cfg_pool.data.nc, table=table,
+        text_encoder=CLIPTextEncoder(cfg_pool.model.text_encoder, device="cpu"),
+    )
+    assert pooled.cdf.projections[0][0].in_features == (
+        cfg_pool.model.guidance_dim + 2 * cfg_pool.model.widths[0]
+    )
 
 
 def test_neck_variants() -> None:

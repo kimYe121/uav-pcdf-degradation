@@ -101,7 +101,7 @@ class PCDFNet(nn.Module):
         # 文本嵌入 -> 引导空间；阶段 2 会冻结它作为 L_dt 的稳定目标。
         self.text_adapter = GuidanceAdapter(text_encoder.hidden_size, cfg.guidance_dim)
 
-        self.cdf = ChannelNormSoftGate(cfg.guidance_dim, self.widths)
+        self.cdf = ChannelNormSoftGate(cfg.guidance_dim, self.widths, mode=cfg.cdf_input)
         # Fig. 4 的字面接线是 concat 直连检测头（图例：F = Channel Concatenation）；
         # v5 系检测器需要颈部，两档都保留，由 model.neck 决定。
         self.neck = PANNeck(self.widths) if cfg.neck == "pan" else None

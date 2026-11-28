@@ -189,6 +189,9 @@ class ModelConfig:
 
     gate_hidden: int = 256
     guidance_dim: int = 256
+    # CDF 投影的输入：guide = 只吃条件引导（论文 Eq.10）；guide_pool = 引导 +
+    # 两模态池化特征（Fig.4 箭头的读法，旧实现）。结构字段，必须随检查点走。
+    cdf_input: str = "guide_pool"
     gate_pool: str = "max"
     text_cache_size: int = 8192
 
@@ -319,6 +322,10 @@ class Config:
             for value, axis in zip(data.imgsz, ("H", "W")):
                 if int(value) <= 0 or int(value) % 32 != 0:
                     problems.append(f"data.imgsz 的 {axis}={value} 必须是 32 的正整数倍")
+        if model.cdf_input not in ("guide", "guide_pool"):
+            problems.append(
+                f"model.cdf_input 只能是 guide/guide_pool，当前 {model.cdf_input!r}"
+            )
         if train.stage2_fuse not in ("decoupled", "raw"):
             problems.append(
                 f"train.stage2_fuse 只能是 decoupled/raw，当前 {train.stage2_fuse!r}"

@@ -75,7 +75,9 @@ model:
   pretrained_backbone: true
 
   gate_hidden: 256
-  guidance_dim: 256         # 必须等于 widths[2]
+  guidance_dim: 256
+  # CDF 投影输入（Eq.10）：guide = 只吃条件引导；guide_pool = 旧实现（含池化特征）
+  cdf_input: guide         # 必须等于 widths[2]
   gate_pool: max
   text_cache_size: 8192
 

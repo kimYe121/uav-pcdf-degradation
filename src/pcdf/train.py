@@ -396,7 +396,7 @@ class Trainer:
             fwd = dict(
                 cond=cond,
                 guidance="text" if self.stage in (1, 2) else "visual",
-                return_aux=(self.stage == 2),
+                return_aux=False,
                 return_ft=(self.stage == 2),
             )
             if self.stage == 2:
@@ -408,8 +408,9 @@ class Trainer:
             terms: dict[str, Tensor] = {}
             if self.stage == 2:
                 # L_dc：共享 OBB head 分别作用于两个条件不变分支。
-                l_dc = self.criterion(out["aux_rgb"], batch)[0].sum() + self.criterion(
-                    out["aux_ir"], batch
+                # 式 8：L_dc 作用在解耦特征 F_v 本身，不是加权后的 W⊙F_v。
+                l_dc = self.criterion(model.head(out["fv_rgb"]), batch)[0].sum() + self.criterion(
+                    model.head(out["fv_ir"]), batch
                 )[0].sum()
                 terms = decoupling_terms(
                     out["fs_gap"],
