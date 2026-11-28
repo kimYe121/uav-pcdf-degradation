@@ -162,3 +162,8 @@ def test_checkpoint_cfg_adopts_local_runtime_paths() -> None:
         assert getattr(cfg.model, key) == getattr(env.model, key), key
     assert cfg.model.widths == env.model.widths
 
+def test_rejects_bad_stage2_fuse() -> None:
+    """stage2 融合路径只允许 decoupled/raw。"""
+    with pytest.raises(ConfigError, match="stage2_fuse"):
+        load_config(overrides={"train.stage2_fuse": "concat"})
+

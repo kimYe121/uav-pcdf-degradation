@@ -218,6 +218,9 @@ class TrainConfig:
     # 另有一句 "training only the SCPL and CDF modules"；后者可读成
     # "检测器不更新"（默认）。设 True 则阶段 1 也训练检测器，只冻结 CLIP。
     stage1_train_detector: bool = False
+    # 阶段 2 的 CDF 融合对象：decoupled（论文路径，作用在 F_v）或 raw
+    # （消融用：作用在 encoder 原始特征，等价于去掉 PCD 的 stage2）。
+    stage2_fuse: str = "decoupled"
 
     eval_interval: int = 5  # <=0 表示不验证
     val_batches: int = 0  # 0 表示完整验证集
@@ -316,6 +319,10 @@ class Config:
             for value, axis in zip(data.imgsz, ("H", "W")):
                 if int(value) <= 0 or int(value) % 32 != 0:
                     problems.append(f"data.imgsz 的 {axis}={value} 必须是 32 的正整数倍")
+        if train.stage2_fuse not in ("decoupled", "raw"):
+            problems.append(
+                f"train.stage2_fuse 只能是 decoupled/raw，当前 {train.stage2_fuse!r}"
+            )
         if data.batch < 1:
             problems.append(f"data.batch 必须 >= 1，当前 {data.batch}")
         if data.workers < 0:
