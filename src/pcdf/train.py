@@ -501,6 +501,10 @@ class Trainer:
             # 2026-11-24 的 best.pt 误选事故（见 STATE §9）。部署口径的
             # 视觉 test 在训练结束后单独评。
             guidance="text" if self.stage in (1, 2) else "visual",
+            # 监控必须与训练走同一条融合路径：阶段 2 训练时 CDF 作用在 F_v 上，
+            # 只传 guidance=text 会退回 fuse="raw"（阶段 1 的路径），val 量到的
+            # 是另一条前向（实测 ep5 只有 3.3，而训练分支正常下降）。
+            fuse="decoupled" if self.stage == 2 else None,
         )
         metrics["map50"] = result["map50"]
         metrics["eval_images"] = result["n_images"]
